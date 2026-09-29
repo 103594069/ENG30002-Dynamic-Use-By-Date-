@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""
+Poll a Google Sheet every 30 seconds and print only the newest data.
+
+- First scan: checks the newest (last filled) cell in the sheet.
+- Later scans: checks any cell that was added or changed since the last scan,
+  or prints "no change in data since last scan" if nothing changed.
+- Each value is printed as a status:
+    1 -> safe, 2 -> borderline, 3 -> spoiled, anything else -> quack quack data is whack
+
+Requirements:
+The sheet must be shared as "Anyone with the link can view"
+
+"""
+
+import argparse
+import csv
+import io
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+
+SHEET_ID = "1KEMvxW9yBK-mELOk6q4PxLg5YHd5wGCNQFDKcpSUFQg"
+GID = "0"  # the tab id from the URL (#gid=0 is the first tab)
+CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+
+
+def fetch_sheet(url: str) -> list[list[str]]:
+    """Download the sheet as CSV and return it as a list of rows."""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        content_type = resp.headers.get("Content-Type", "")
+        text = resp.read().decode("utf-8")
+
+    # If the sheet isn't public, Google returns an HTML sign-in page instead of CSV.
+    if "text/html" in content_type:
+        raise PermissionError(
+            "Got an HTML page instead of CSV. Make sure the sheet is shared as "
+            "'Anyone with the link can view'."
+        )
+
+    return list(csv.reader(io.StringIO(text)))
+
+
+def col_letter(index: int) -> str:
+    """Convert a 0-based column index to a letter (0 -> A, 26 -> AA)."""
+    letters = ""
+    index += 1
+    while index:
+        index, rem = divmod(index - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def to_cells(rows: list[list[str]]) -> dict[tuple[int, int], str]:
+    """Map (row, col) -> value for every non-empty cell."""
+    return {
+        (r, c): value
+        for r, row in enumerate(rows)
+        for c, value in enumerate(row)
+        if value.strip()
+    }
+
+
+STATUS = {1: "safe", 2: "borderline", 3: "spoiled"}
+
+
+def status(value: str) -> str:
+    """Turn a cell value into its status message."""
+    try:
+        number = float(value.strip())
+    except ValueError:
+        return "quack quack data is whack"
+    if number.is_integer() and int(number) in STATUS:
+        return STATUS[int(number)]
+    return "quack quack data is whack"
+
+
+def cell_name(pos: tuple[int, int]) -> str:
+    row, col = pos
+    return f"{col_letter(col)}{row + 1}"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Poll a Google Sheet and print the newest data.")
+    parser.add_argument("--interval", type=int, default=30, help="seconds between scans (default 30)")
+    args = parser.parse_args()
+
+    print(f"Scanning sheet every {args.interval}s. Press Ctrl+C to stop.\n")
+    last_cells = None
+
+    try:
+        while True:
+            stamp = datetime.now().strftime("%H:%M:%S")
+            try:
+                cells = to_cells(fetch_sheet(CSV_URL))
+
+                if last_cells is None:
+                    # First scan: show the newest (last filled) cell.
+                    if cells:
+                        newest = max(cells)  # furthest down, then furthest right
+                        print(f"[{stamp}] {status(cells[newest])}")
+                    else:
+                        print(f"[{stamp}] Sheet is empty")
+                else:
+                    changed = sorted(
+                        pos for pos, value in cells.items() if last_cells.get(pos) != value
+                    )
+                    if changed:
+                        for pos in changed:
+                            print(f"[{stamp}] {status(cells[pos])}")
+                    else:
+                        print(f"[{stamp}] no change in data since last scan")
+
+                last_cells = cells
+
+            except PermissionError as e:
+                print(f"[{stamp}] {e}", file=sys.stderr)
+            except (urllib.error.URLError, TimeoutError) as e:
+                print(f"[{stamp}] Network error: {e}", file=sys.stderr)
+
+            time.sleep(args.interval)
+
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+if __name__ == "__main__":
+    main()
