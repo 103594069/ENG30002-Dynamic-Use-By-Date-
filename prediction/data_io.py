@@ -62,3 +62,33 @@ def load_https_payload_csv(path: str) -> list[Reading]:
                 risk=row.get("risk") or None,
             ))
     return readings
+
+
+def load_sd_datacsv(path: str) -> list[Reading]:
+    """Load readings from the on-device DATA.CSV schema (backup path).
+
+    Expected header: date,time,trial,temp_C,humidity_pct,pressure_hPa,
+    lux,mq135_raw,mq135_base,mq135_increase,source. There is no
+    device_ts or risk column in this schema, so those fields are None.
+    """
+    readings: list[Reading] = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            server_ts = datetime.strptime(
+                f"{row['date']} {row['time']}", "%Y-%m-%d %H:%M:%S"
+            )
+            readings.append(Reading(
+                server_ts=server_ts,
+                device_ts=None,
+                trial=row.get("trial") or None,
+                source=row.get("source") or None,
+                temp_c=_parse_float(row.get("temp_C", "")),
+                humidity_pct=_parse_float(row.get("humidity_pct", "")),
+                pressure_hpa=_parse_float(row.get("pressure_hPa", "")),
+                lux=_parse_float(row.get("lux", "")),
+                mq135_raw=_parse_float(row.get("mq135_raw", "")),
+                gas_base=_parse_float(row.get("mq135_base", "")),
+                gas_increase=_parse_float(row.get("mq135_increase", "")),
+                risk=None,
+            ))
+    return readings
