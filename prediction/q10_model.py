@@ -40,7 +40,7 @@ def classify_status(pct_used: float, use_soon_pct: float, past_due_pct: float) -
 
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from prediction.models import Reading
 
@@ -99,3 +99,81 @@ def accumulate_equivalent_hours(
             gaps.append(Gap(prev.server_ts, cur.server_ts, actual_hours, dt_hours))
         equivalent_hours += rate_factor(cur.temp_c, t_ref_c, q10) * dt_hours
     return AccumulationResult(equivalent_hours, gaps)
+
+
+from typing import Optional
+
+
+def forecast_temperature(
+    readings: list[Reading], window_hours: float, now: datetime
+) -> Optional[float]:
+    """Mean temperature over the last `window_hours` up to `now`.
+
+    Returns None if no readings fall in the window (the caller has to
+    decide what to do - this module makes no policy decisions).
+    """
+    window_start = now - timedelta(hours=window_hours)
+    in_window = [
+        r.temp_c for r in readings
+        if r.temp_c is not None and window_start <= r.server_ts <= now
+    ]
+    if not in_window:
+        return None
+    return sum(in_window) / len(in_window)
+
+
+@dataclass
+class UseByPrediction:
+    remaining_hours: float
+    predicted_use_by: datetime
+
+
+def predict_use_by(
+    equivalent_hours: float,
+    l_ref_hours: float,
+    forecast_temp_c: float,
+    t_ref_c: float,
+    q10: float,
+    now: datetime,
+) -> UseByPrediction:
+    """Project forward from the accumulated equivalent hours.
+
+    remaining_ref_hours is how much "equivalent shelf life at T_ref" is
+    left. Dividing by k(T_forecast) converts that back into real elapsed
+    hours at the forecast temperature. A negative remaining_hours means
+    the food is already past its use-by at the reference rate.
+    """
+    remaining_ref_hours = l_ref_hours - equivalent_hours
+    k_forecast = rate_factor(forecast_temp_c, t_ref_c, q10)
+    remaining_hours = remaining_ref_hours / k_forecast
+    predicted_use_by = now + timedelta(hours=remaining_hours)
+    return UseByPrediction(remaining_hours, predicted_use_by)
+
+
+def mq135_disagrees(status: str, gas_increase: Optional[float], danger_ratio: float) -> bool:
+    """True when the model says Fresh but the gas sensor says otherwise.
+
+    This only checks one direction (model optimistic, sensor pessimistic)
+    because that is the safety-relevant case: it's the one where trusting
+    the model alone would be a mistake. See SOURCES.md "Open questions"
+    for whether the reverse case is worth adding.
+    """
+    if status != "Fresh" or gas_increase is None:
+        return False
+    return gas_increase >= danger_ratio
+
+
+def count_outside_q10_range(readings: list[Reading], valid_range_c: tuple[float, float]) -> int:
+    """Count readings whose temperature falls outside the range the Q10
+    source data actually covers (config.Q10_VALID_TEMP_RANGE_C).
+
+    Those readings are still used by accumulate_equivalent_hours - this
+    is purely a "trust this less" counter surfaced in PredictionRow and
+    printed by the CLI, not a filter. Missing temperatures are not
+    counted here; filter_plausible_temperatures already handles those.
+    """
+    lo, hi = valid_range_c
+    return sum(
+        1 for r in readings
+        if r.temp_c is not None and not (lo <= r.temp_c <= hi)
+    )

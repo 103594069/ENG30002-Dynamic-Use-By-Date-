@@ -74,3 +74,53 @@ def test_filter_plausible_temperatures_drops_missing_and_out_of_range():
     clean, dropped = filter_plausible_temperatures(readings, (-10.0, 60.0))
     assert len(clean) == 1
     assert dropped == 2
+
+
+from datetime import timedelta
+
+from prediction.q10_model import forecast_temperature, mq135_disagrees, predict_use_by
+
+
+def test_forecast_temperature_averages_window():
+    now = datetime(2026, 1, 2, 0, 0)
+    readings = [
+        _reading(now - timedelta(hours=1), 20.0),
+        _reading(now - timedelta(hours=2), 24.0),
+        _reading(now - timedelta(hours=20), 100.0),  # outside the 12h window
+    ]
+    assert forecast_temperature(readings, window_hours=12.0, now=now) == 22.0
+
+
+def test_forecast_temperature_returns_none_when_window_is_empty():
+    now = datetime(2026, 1, 2, 0, 0)
+    readings = [_reading(now - timedelta(hours=20), 100.0)]
+    assert forecast_temperature(readings, window_hours=12.0, now=now) is None
+
+
+def test_predict_use_by_remaining_hours_at_reference_rate():
+    now = datetime(2026, 1, 1, 0, 0)
+    prediction = predict_use_by(
+        equivalent_hours=10.0, l_ref_hours=48.0, forecast_temp_c=4.0,
+        t_ref_c=4.0, q10=1.75, now=now,
+    )
+    assert abs(prediction.remaining_hours - 38.0) < 1e-6
+    assert prediction.predicted_use_by == now + timedelta(hours=38.0)
+
+
+def test_mq135_disagrees_only_when_model_says_fresh_but_sensor_says_danger():
+    assert mq135_disagrees("Fresh", gas_increase=6.0, danger_ratio=5.0) is True
+    assert mq135_disagrees("Fresh", gas_increase=1.0, danger_ratio=5.0) is False
+    assert mq135_disagrees("Use soon", gas_increase=6.0, danger_ratio=5.0) is False
+    assert mq135_disagrees("Fresh", gas_increase=None, danger_ratio=5.0) is False
+
+
+def test_count_outside_q10_range_counts_readings_outside_the_source_data_range():
+    from prediction.q10_model import count_outside_q10_range
+
+    readings = [
+        _reading(datetime(2026, 1, 1, 0, 0), 4.0),   # inside (4.0, 25.0)
+        _reading(datetime(2026, 1, 1, 1, 0), 3.9),   # below range
+        _reading(datetime(2026, 1, 1, 2, 0), 30.0),  # above range
+        _reading(datetime(2026, 1, 1, 3, 0), None),  # missing, not counted here
+    ]
+    assert count_outside_q10_range(readings, (4.0, 25.0)) == 2
