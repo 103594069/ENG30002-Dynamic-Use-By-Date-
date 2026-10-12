@@ -12,6 +12,7 @@ from typing import Optional
 from prediction import config
 from prediction.models import PredictionRow, Reading
 from prediction.q10_model import (
+    UseByPrediction,
     accumulate_equivalent_hours,
     classify_status,
     count_outside_q10_range,
@@ -53,10 +54,32 @@ def q10_discrepancy_message() -> Optional[str]:
     return None
 
 
+def _predict_at_q10(
+    q10: float, clean: list[Reading], forecast_temp: float, now: datetime
+) -> UseByPrediction:
+    """Run the whole accumulate-then-project chain at a single Q10 value.
+
+    Each Q10 needs its OWN accumulation: Q10 changes k(T) for every past
+    interval, not just the forward projection, so reusing one
+    accumulation across band ends would be wrong.
+    """
+    acc = accumulate_equivalent_hours(clean, config.T_REF_C, q10, config.MAX_DT_HOURS)
+    return predict_use_by(
+        acc.equivalent_hours, config.L_REF_HOURS, forecast_temp,
+        config.T_REF_C, q10, now,
+    )
+
+
 def run_prediction(readings: list[Reading], now: datetime) -> PredictionRow:
     """Readings must already be filtered to one trial, sorted ascending,
     and starting at the resolved food-start timestamp."""
     clean, dropped = filter_plausible_temperatures(readings, config.PLAUSIBLE_TEMP_RANGE_C)
+    if not clean:
+        raise ValueError(
+            f"No usable readings after filtering (dropped {dropped} of {len(readings)} "
+            f"for implausible temperature). Check the input file, --trial, and "
+            f"--food-start."
+        )
 
     forecast_temp = forecast_temperature(clean, config.FORECAST_WINDOW_HOURS, now)
     if forecast_temp is None:
@@ -70,27 +93,28 @@ def run_prediction(readings: list[Reading], now: datetime) -> PredictionRow:
         config.T_REF_C, config.Q10, now,
     )
 
-    # Lower Q10 -> slower spoilage -> later use-by ("latest").
-    # Higher Q10 -> faster spoilage -> earlier use-by ("earliest").
+    # Which band end gives the EARLIER use-by depends on which side of
+    # T_ref the readings and forecast sit on, so it cannot be hard-wired:
+    # k(T) = Q10^((T - T_ref)/10), so above T_ref a higher Q10 means
+    # faster spoilage (earlier use-by), but BELOW T_ref the exponent is
+    # negative and a higher Q10 means a SMALLER k - slower spoilage and a
+    # LATER use-by. A fridge at 2C (the device's normal case) is exactly
+    # that sub-T_ref situation. So compute both and sort by the result.
     q10_low, q10_high = config.Q10_BAND
-    latest_acc = accumulate_equivalent_hours(
-        clean, config.T_REF_C, q10_low, config.MAX_DT_HOURS
-    )
-    latest = predict_use_by(
-        latest_acc.equivalent_hours, config.L_REF_HOURS, forecast_temp,
-        config.T_REF_C, q10_low, now,
-    )
-    earliest_acc = accumulate_equivalent_hours(
-        clean, config.T_REF_C, q10_high, config.MAX_DT_HOURS
-    )
-    earliest = predict_use_by(
-        earliest_acc.equivalent_hours, config.L_REF_HOURS, forecast_temp,
-        config.T_REF_C, q10_high, now,
-    )
+    band_low = _predict_at_q10(q10_low, clean, forecast_temp, now)
+    band_high = _predict_at_q10(q10_high, clean, forecast_temp, now)
+    if band_low.predicted_use_by <= band_high.predicted_use_by:
+        earliest, latest = band_low, band_high
+    else:
+        earliest, latest = band_high, band_low
 
     pct_used = pct_shelf_life_used(central_acc.equivalent_hours, config.L_REF_HOURS)
     status = classify_status(pct_used, config.STATUS_USE_SOON_PCT, config.STATUS_PAST_DUE_PCT)
-    latest_gas_increase = clean[-1].gas_increase if clean else None
+    # MQ-135 is an INDEPENDENT indicator (plan: "never an input to the Q10
+    # maths"), so it is read from the raw readings, not the
+    # temperature-filtered `clean` list - otherwise one bad temperature on
+    # the newest sample would silently substitute an older gas reading.
+    latest_gas_increase = readings[-1].gas_increase if readings else None
     disagrees = mq135_disagrees(status, latest_gas_increase, config.MQ135_DANGER_RATIO)
     out_of_range = count_outside_q10_range(clean, config.Q10_VALID_TEMP_RANGE_C)
 
