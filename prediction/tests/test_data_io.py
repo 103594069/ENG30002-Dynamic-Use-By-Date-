@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from prediction.data_io import load_https_payload_csv, load_sd_datacsv
+from prediction.data_io import load_https_payload_csv, load_sd_datacsv, write_prediction_row
+from prediction.models import PredictionRow
 
 HTTPS_CSV = """server_ts,device_ts,trial,source,temp,humidity,pressure,lux,mq135,gas_base,gas_increase,risk
 2026-10-01T09:00:00,2026-10-01T09:00:01,ChickenTrial1,MANUAL,4.0,55.0,1015.0,0.0,900,900,1.0,SAFE
@@ -43,3 +44,29 @@ def test_load_sd_datacsv_combines_date_and_time(tmp_path):
     assert r.gas_increase == 1.0
     assert r.device_ts is None
     assert r.risk is None
+
+
+def _sample_row() -> PredictionRow:
+    return PredictionRow(
+        run_ts=datetime(2026, 10, 2, 9, 0, 0), equivalent_hours=10.0,
+        pct_shelf_life_used=20.8, remaining_hours=38.0,
+        predicted_use_by=datetime(2026, 10, 3, 23, 0, 0),
+        predicted_use_by_earliest=datetime(2026, 10, 3, 12, 0, 0),
+        predicted_use_by_latest=datetime(2026, 10, 4, 10, 0, 0),
+        status="Fresh", mq135_gas_increase=1.2, mq135_disagrees=False,
+        gap_count=0, dropped_reading_count=0, q10_range_exceeded_count=0,
+        t_ref_c=4.0, l_ref_hours=48.0,
+        q10=1.75, q10_band_low=1.5, q10_band_high=2.0,
+        forecast_window_hours=12.0, config_version="v1",
+    )
+
+
+def test_write_prediction_row_writes_header_once_then_appends(tmp_path):
+    path = tmp_path / "predictions.csv"
+
+    write_prediction_row(str(path), _sample_row())
+    write_prediction_row(str(path), _sample_row())
+
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    assert lines[0].startswith("run_ts,equivalent_hours")
+    assert len(lines) == 3  # header + two appended rows

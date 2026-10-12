@@ -14,10 +14,11 @@ actual column layout is still unverified (PIPELINE_PLAN.md, open risk
 from __future__ import annotations
 
 import csv
+import os
 from datetime import datetime
 from typing import Optional
 
-from prediction.models import Reading
+from prediction.models import PredictionRow, Reading
 
 
 def _parse_float(value: str) -> Optional[float]:
@@ -92,3 +93,43 @@ def load_sd_datacsv(path: str) -> list[Reading]:
                 risk=None,
             ))
     return readings
+
+
+_PREDICTION_FIELDS = [
+    "run_ts", "equivalent_hours", "pct_shelf_life_used", "remaining_hours",
+    "predicted_use_by", "predicted_use_by_earliest", "predicted_use_by_latest",
+    "status", "mq135_gas_increase", "mq135_disagrees", "gap_count",
+    "dropped_reading_count", "q10_range_exceeded_count", "t_ref_c", "l_ref_hours",
+    "q10", "q10_band_low", "q10_band_high", "forecast_window_hours", "config_version",
+]
+
+
+def write_prediction_row(path: str, row: PredictionRow) -> None:
+    """Append one prediction to the predictions CSV, writing a header first."""
+    is_new = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(_PREDICTION_FIELDS)
+        writer.writerow([
+            row.run_ts.isoformat(),
+            row.equivalent_hours,
+            row.pct_shelf_life_used,
+            row.remaining_hours,
+            row.predicted_use_by.isoformat(),
+            row.predicted_use_by_earliest.isoformat(),
+            row.predicted_use_by_latest.isoformat(),
+            row.status,
+            row.mq135_gas_increase,
+            row.mq135_disagrees,
+            row.gap_count,
+            row.dropped_reading_count,
+            row.q10_range_exceeded_count,
+            row.t_ref_c,
+            row.l_ref_hours,
+            row.q10,
+            row.q10_band_low,
+            row.q10_band_high,
+            row.forecast_window_hours,
+            row.config_version,
+        ])
