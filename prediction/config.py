@@ -75,6 +75,8 @@ MQ135_DANGER_RATIO = 5.0
 
 # --- Status thresholds ----------------------------------------------------
 
+# Our choice, not from a source - thresholds for the Fresh/Use soon/Past
+# use-by status bands.
 STATUS_USE_SOON_PCT = 70.0
 STATUS_PAST_DUE_PCT = 100.0
 
