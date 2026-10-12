@@ -44,6 +44,16 @@ Run once or twice a day:
   roughly 4-25°C (`config.Q10_VALID_TEMP_RANGE_C`). Readings outside that range are
   still used in the accumulation (not dropped), but are counted
   (`q10_range_exceeded_count`) and the CLI prints a warning when any occur.
+- **Expect `q10_range_exceeded_count` to fire on every normal fridge run.** A domestic
+  fridge runs at roughly 1-4°C, and `config.Q10_VALID_TEMP_RANGE_C`'s lower bound is
+  4.0°C, so a correctly-refrigerated trial will trip this counter on most of its
+  readings. That is informational, not a fault: it flags that those intervals were
+  computed by extrapolating Q10 *below* the range the source data (Mumbre et al.'s
+  4-25°C) actually covers, which is a reason to trust the exact number slightly less —
+  not a sign anything went wrong with the run or the sensor. A count of zero on a
+  refrigerated trial would be the surprising result. Only an unexpectedly *large* count
+  on a trial you believed was refrigerated (or any count on a trial held above 25°C) is
+  worth investigating.
 - **T_forecast is a guess** based on the mean of the last `config.FORECAST_WINDOW_HOURS`
   of readings, not an actual forecast.
 - **MQ-135 vs. ammonia-specific MQ137.** Mumbre's 10/30ppm ammonia thresholds don't

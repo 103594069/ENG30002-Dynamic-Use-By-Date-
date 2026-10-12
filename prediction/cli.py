@@ -49,7 +49,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     configured_start = (
         datetime.fromisoformat(args.food_start) if args.food_start else config.FOOD_START_TS
     )
-    start = resolve_food_start(readings, configured_start, args.trial)
+    # `readings` is already filtered to args.trial above, so the trial is
+    # not passed again here - resolve_food_start would just re-apply the
+    # same filter to an already-filtered list.
+    start = resolve_food_start(readings, configured_start, trial=None)
     readings = sorted((r for r in readings if r.server_ts >= start), key=lambda r: r.server_ts)
 
     row = run_prediction(readings, now)
@@ -60,6 +63,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         f"Equivalent hours: {row.equivalent_hours:.1f} / {row.l_ref_hours:.0f} "
         f"({row.pct_shelf_life_used:.0f}% of shelf life used)"
     )
+    print(f"Remaining hours: {row.remaining_hours:.1f}")
     print(
         f"Predicted use-by: {row.predicted_use_by.isoformat()} "
         f"(range {row.predicted_use_by_earliest.isoformat()} to "

@@ -6,6 +6,12 @@ free of I/O is what makes every function here trivial to unit test.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Optional
+
+from prediction.models import Reading
+
 
 def rate_factor(temp_c: float, t_ref_c: float, q10: float) -> float:
     """Spoilage rate at temp_c, relative to the rate at t_ref_c.
@@ -28,6 +34,8 @@ def derive_q10_from_ratio(rate_ratio: float, delta_t_c: float) -> float:
 
 
 def pct_shelf_life_used(equivalent_hours: float, l_ref_hours: float) -> float:
+    """Accumulated equivalent hours as a percentage of the reference shelf
+    life; `l_ref_hours` must be > 0. Can exceed 100 (already past due)."""
     return (equivalent_hours / l_ref_hours) * 100.0
 
 
@@ -37,12 +45,6 @@ def classify_status(pct_used: float, use_soon_pct: float, past_due_pct: float) -
     if pct_used >= use_soon_pct:
         return "Use soon"
     return "Fresh"
-
-
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-
-from prediction.models import Reading
 
 
 def filter_plausible_temperatures(
@@ -89,6 +91,10 @@ def accumulate_equivalent_hours(
     time (there is no prior reading to measure a gap from). A gap longer
     than `max_dt_hours` (e.g. a Wi-Fi outage) is capped before being
     multiplied by k, and recorded so the caller can report it.
+
+    Each interval's time is charged at the ARRIVING reading's temperature
+    (trailing-edge attribution), so a transition like fridge-to-counter is
+    conservatively charged at the warmer endpoint for the whole interval.
     """
     equivalent_hours = 0.0
     gaps: list[Gap] = []
@@ -99,9 +105,6 @@ def accumulate_equivalent_hours(
             gaps.append(Gap(prev.server_ts, cur.server_ts, actual_hours, dt_hours))
         equivalent_hours += rate_factor(cur.temp_c, t_ref_c, q10) * dt_hours
     return AccumulationResult(equivalent_hours, gaps)
-
-
-from typing import Optional
 
 
 def forecast_temperature(

@@ -1,7 +1,16 @@
+from datetime import datetime, timedelta
+
+from prediction.models import Reading
 from prediction.q10_model import (
+    accumulate_equivalent_hours,
     classify_status,
+    count_outside_q10_range,
     derive_q10_from_ratio,
+    filter_plausible_temperatures,
+    forecast_temperature,
+    mq135_disagrees,
     pct_shelf_life_used,
+    predict_use_by,
     rate_factor,
 )
 
@@ -27,12 +36,6 @@ def test_classify_status_bands():
     assert classify_status(50.0, use_soon_pct=70.0, past_due_pct=100.0) == "Fresh"
     assert classify_status(80.0, use_soon_pct=70.0, past_due_pct=100.0) == "Use soon"
     assert classify_status(120.0, use_soon_pct=70.0, past_due_pct=100.0) == "Past use-by"
-
-
-from datetime import datetime
-
-from prediction.models import Reading
-from prediction.q10_model import accumulate_equivalent_hours, filter_plausible_temperatures
 
 
 def _reading(ts: datetime, temp_c) -> Reading:
@@ -76,11 +79,6 @@ def test_filter_plausible_temperatures_drops_missing_and_out_of_range():
     assert dropped == 2
 
 
-from datetime import timedelta
-
-from prediction.q10_model import forecast_temperature, mq135_disagrees, predict_use_by
-
-
 def test_forecast_temperature_averages_window():
     now = datetime(2026, 1, 2, 0, 0)
     readings = [
@@ -115,8 +113,6 @@ def test_mq135_disagrees_only_when_model_says_fresh_but_sensor_says_danger():
 
 
 def test_count_outside_q10_range_counts_readings_outside_the_source_data_range():
-    from prediction.q10_model import count_outside_q10_range
-
     readings = [
         _reading(datetime(2026, 1, 1, 0, 0), 4.0),   # inside (4.0, 25.0)
         _reading(datetime(2026, 1, 1, 1, 0), 3.9),   # below range

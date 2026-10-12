@@ -1,6 +1,10 @@
+from pathlib import Path
+
 from prediction.cli import main
 
-MOCK_SHEET = "prediction/mock_data/mock_sheet.csv"
+# Resolved from this file's own location, not the cwd, so the suite runs
+# from the repo root AND from inside prediction/.
+MOCK_SHEET = str(Path(__file__).resolve().parent.parent / "mock_data" / "mock_sheet.csv")
 
 
 def test_cli_runs_end_to_end_and_writes_predictions(tmp_path, capsys):
@@ -15,6 +19,7 @@ def test_cli_runs_end_to_end_and_writes_predictions(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Status: Fresh" in captured.out
+    assert "Remaining hours:" in captured.out
     assert "WARNING: MQ-135 disagrees" in captured.out
     assert "NOTE: 1 reading(s) fell outside the Q10-supported" in captured.out
     assert "NOTE: 1 reading gap(s) longer than" in captured.out

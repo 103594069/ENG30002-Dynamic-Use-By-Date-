@@ -12,9 +12,9 @@ IEEE-style citation log for every literature-derived parameter in `config.py`. S
    https://www.ijert.org/iot-based-food-spoilage-detection-system-using-ammonia-sensing-and-environmental-monitoring-ijertv15is042618
 2. P. S. Taoukis, T. P. Labuza, and I. S. Saguy, *Kinetics of Food Deterioration and
    Shelf-Life Prediction*. Boca Raton, FL, USA: CRC Press, 1997.
-3. U.S. Food Safety and Inspection Service, "Cold Food Storage Chart," FoodSafety.gov.
-   [Online]. Available: **TODO (Marcus): insert the verified primary FoodSafety.gov URL
-   here before submission - do not cite a secondary article.**
+3. U.S. FoodSafety.gov (a USDA FSIS / HHS FDA / CDC partnership site), "Cold Food
+   Storage Chart." [Online]. Available: **TODO (Marcus): insert the verified primary
+   FoodSafety.gov URL here before submission - do not cite a secondary article.**
 
 ## Parameter table
 
@@ -36,8 +36,9 @@ slower" rate at 4°C. Using [2]'s formula:
 
 This is implemented as `q10_model.derive_q10_from_ratio(3.0, 21.0)` and unit-tested in
 `tests/test_q10_model.py`. **`config.Q10` is set to 1.75, not this computed 1.69** - see
-"Open questions" below. `pipeline.q10_discrepancy_message()` prints both numbers every
-time the CLI runs so this is never silently resolved one way or the other.
+"Open questions" below. `pipeline.q10_discrepancy_message()` returns a message with both
+numbers, which `cli.py` prints every run, so this is never silently resolved one way or
+the other.
 
 ## Limitations (see also README.md)
 
