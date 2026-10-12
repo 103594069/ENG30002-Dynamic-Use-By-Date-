@@ -21,7 +21,12 @@ from typing import Optional
 from prediction.models import PredictionRow, Reading
 
 
-def _parse_float(value: str) -> Optional[float]:
+def _parse_float(value: Optional[str]) -> Optional[float]:
+    # `value` can be None, not just "": csv.DictReader fills missing
+    # trailing fields with None when a row has fewer columns than the
+    # header (a hand-edited CSV, a half-written SD card row).
+    if not value:
+        return None
     value = value.strip()
     if not value:
         return None
@@ -31,11 +36,17 @@ def _parse_float(value: str) -> Optional[float]:
         return None
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+    # See _parse_float on why None is a real input here.
+    if not value:
+        return None
     value = value.strip()
     if not value:
         return None
-    return datetime.fromisoformat(value)
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def load_https_payload_csv(path: str) -> list[Reading]:
@@ -44,22 +55,36 @@ def load_https_payload_csv(path: str) -> list[Reading]:
     Expected header (order doesn't matter, matched by name):
     server_ts, device_ts, trial, source, temp, humidity, pressure, lux,
     mq135, gas_base, gas_increase, risk.
+
+    Raises ValueError naming the file, row, and offending value if
+    `server_ts` is missing, blank, or not an ISO8601 timestamp.
+    `Reading.server_ts` is the one non-Optional field, so letting a None
+    through here would break that contract and fail much later (in a
+    min() over timestamps, say) far from the real cause.
     """
     readings: list[Reading] = []
     with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
+        # start=2 so the number matches the line in the file: row 1 is the header.
+        for row_number, row in enumerate(csv.DictReader(f), start=2):
+            raw_server_ts = row.get("server_ts")
+            server_ts = _parse_ts(raw_server_ts)
+            if server_ts is None:
+                raise ValueError(
+                    f"{path}: row {row_number} has an invalid or missing "
+                    f"server_ts: {raw_server_ts!r}"
+                )
             readings.append(Reading(
-                server_ts=_parse_ts(row["server_ts"]),
-                device_ts=_parse_ts(row.get("device_ts", "")),
+                server_ts=server_ts,
+                device_ts=_parse_ts(row.get("device_ts")),
                 trial=row.get("trial") or None,
                 source=row.get("source") or None,
-                temp_c=_parse_float(row.get("temp", "")),
-                humidity_pct=_parse_float(row.get("humidity", "")),
-                pressure_hpa=_parse_float(row.get("pressure", "")),
-                lux=_parse_float(row.get("lux", "")),
-                mq135_raw=_parse_float(row.get("mq135", "")),
-                gas_base=_parse_float(row.get("gas_base", "")),
-                gas_increase=_parse_float(row.get("gas_increase", "")),
+                temp_c=_parse_float(row.get("temp")),
+                humidity_pct=_parse_float(row.get("humidity")),
+                pressure_hpa=_parse_float(row.get("pressure")),
+                lux=_parse_float(row.get("lux")),
+                mq135_raw=_parse_float(row.get("mq135")),
+                gas_base=_parse_float(row.get("gas_base")),
+                gas_increase=_parse_float(row.get("gas_increase")),
                 risk=row.get("risk") or None,
             ))
     return readings
@@ -71,25 +96,37 @@ def load_sd_datacsv(path: str) -> list[Reading]:
     Expected header: date,time,trial,temp_C,humidity_pct,pressure_hPa,
     lux,mq135_raw,mq135_base,mq135_increase,source. There is no
     device_ts or risk column in this schema, so those fields are None.
+
+    Raises ValueError naming the file, row, and offending date/time values
+    if the two cannot be combined into a timestamp - a bare strptime
+    error gives no clue which row of which file was at fault.
     """
     readings: list[Reading] = []
     with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            server_ts = datetime.strptime(
-                f"{row['date']} {row['time']}", "%Y-%m-%d %H:%M:%S"
-            )
+        # start=2 so the number matches the line in the file: row 1 is the header.
+        for row_number, row in enumerate(csv.DictReader(f), start=2):
+            raw_date, raw_time = row.get("date"), row.get("time")
+            try:
+                server_ts = datetime.strptime(
+                    f"{raw_date} {raw_time}", "%Y-%m-%d %H:%M:%S"
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{path}: row {row_number} has an invalid or missing "
+                    f"date/time: date={raw_date!r} time={raw_time!r}"
+                ) from exc
             readings.append(Reading(
                 server_ts=server_ts,
                 device_ts=None,
                 trial=row.get("trial") or None,
                 source=row.get("source") or None,
-                temp_c=_parse_float(row.get("temp_C", "")),
-                humidity_pct=_parse_float(row.get("humidity_pct", "")),
-                pressure_hpa=_parse_float(row.get("pressure_hPa", "")),
-                lux=_parse_float(row.get("lux", "")),
-                mq135_raw=_parse_float(row.get("mq135_raw", "")),
-                gas_base=_parse_float(row.get("mq135_base", "")),
-                gas_increase=_parse_float(row.get("mq135_increase", "")),
+                temp_c=_parse_float(row.get("temp_C")),
+                humidity_pct=_parse_float(row.get("humidity_pct")),
+                pressure_hpa=_parse_float(row.get("pressure_hPa")),
+                lux=_parse_float(row.get("lux")),
+                mq135_raw=_parse_float(row.get("mq135_raw")),
+                gas_base=_parse_float(row.get("mq135_base")),
+                gas_increase=_parse_float(row.get("mq135_increase")),
                 risk=None,
             ))
     return readings
