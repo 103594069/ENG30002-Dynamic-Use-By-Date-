@@ -17,5 +17,7 @@ def test_cli_runs_end_to_end_and_writes_predictions(tmp_path, capsys):
     assert "Status: Fresh" in captured.out
     assert "WARNING: MQ-135 disagrees" in captured.out
     assert "NOTE: 1 reading(s) fell outside the Q10-supported" in captured.out
+    assert "NOTE: 1 reading gap(s) longer than" in captured.out
+    assert "NOTE: 2 reading(s) dropped for an implausible temperature." in captured.out
     assert out_path.exists()
     assert len(out_path.read_text(encoding="utf-8").strip().splitlines()) == 2  # header + 1 row
