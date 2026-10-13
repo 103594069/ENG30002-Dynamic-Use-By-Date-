@@ -11,14 +11,38 @@ parameter's source, justification, and open questions.
 
 By default this reads the HTTPS-payload schema (what `food_monitor_compact.ino`'s
 `publishToGoogleSheets()` sends). Pass `--format datacsv` to read the on-device
-`DATA.CSV` schema instead. Results are appended to `predictions.csv` (override with
-`--predictions-out`).
+`DATA.CSV` schema instead, or `--format sheetexport` for the real Sheet's actual
+CSV export schema (see "The real Sheet" below). Results are appended to
+`predictions.csv` (override with `--predictions-out`).
 
-The real Google Sheet doesn't exist for us yet (a teammate holds the link) - once it
-does, export it as CSV (File > Download > CSV, or the public `.../export?format=csv`
-URL the same way `read-data-from-google-sheet` reads it) and point `--readings` at that
-file. No code change is needed as long as the Apps Script's columns match the HTTPS
-schema above.
+Add `--once-per-day` to gate the write: if `--predictions-out` already has a row for
+today's date, the run prints `Skipped: ...` instead of appending a duplicate. This
+models a daily trigger that might fire more than once a day without double-counting.
+
+### The real Sheet
+
+As of 13 Oct the real Sheet is visible (link shared) and its actual CSV export
+columns are narrower than the HTTPS-payload schema assumed above: `Timestamp, MQ135,
+Temp, Humidity`, plus a 5th column with **no header text at all** (pressure). No
+`trial`, `source`, `device_ts`, `lux`, `gas_base`, `gas_increase`, or `risk` columns
+exist. Use `--format sheetexport` for this (`load_sheet_export_csv` in `data_io.py`
+matches the 5th column by position, not name, and parses `Timestamp` as Google
+Sheets' export format `M/D/YYYY H:MM:SS`, not ISO8601). The core Q10 math still works
+fine on just timestamp + temperature; the only loss is the MQ-135 gas-increase
+cross-check, which has nothing to compare against in this schema (always `None`).
+Export the real Sheet as CSV (File > Download > CSV, or the public
+`.../export?format=csv` URL the same way `read-data-from-google-sheet` reads it) and
+point `--readings` at that file.
+
+`mock_data/mock_sheet_export.csv` mirrors this real schema/format (not the richer
+`mock_sheet.csv`) with synthetic data (fridge-cold rising to room temperature over 3
+days) for testing `--format sheetexport --once-per-day` without touching the real
+Sheet. A live demo of what the once-per-day output looks like, structured as a
+separate "Predictions" tab next to a "Readings" tab (one row per reading would make a
+per-reading column nonsensical at a ~30s-30min logging interval), is in the
+"ENG30002 Mock Sheet - Use-By Prediction Test" Google Sheet - see `PIPELINE_PLAN.md`
+for the link. Wiring an actual write-back to the live Sheet (Apps Script trigger vs.
+Python pushing via the Sheets API) is still undesigned - see open risk #7.
 
 ## Scheduling
 
@@ -62,8 +86,10 @@ Run once or twice a day:
 
 ## Assumptions
 
-- The real Apps Script / Google Sheet is unverified (`PIPELINE_PLAN.md`, open risk #1).
-  All development and testing here uses the mock data in `mock_data/mock_sheet.csv`.
+- The Apps Script that writes the Sheet is still unverified (`PIPELINE_PLAN.md`, open
+  risk #1) - we can now see the Sheet's output, not its source. `mock_sheet.csv`
+  (richer schema) and `mock_sheet_export.csv` (real schema) are both still mocks, not
+  a connection to the live Sheet.
 - A food-start timestamp is required to accumulate equivalent hours correctly; without
   one, `resolve_food_start` falls back to the trial's earliest reading, which may
   include readings from before the chicken was actually placed in the enclosure.

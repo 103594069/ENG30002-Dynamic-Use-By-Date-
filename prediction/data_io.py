@@ -49,6 +49,28 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _parse_sheet_export_ts(value: Optional[str]) -> Optional[datetime]:
+    # Google Sheets' CSV export writes timestamps in US locale
+    # (M/D/YYYY H:MM:SS), not ISO8601 - a separate format from the other
+    # two loaders' _parse_ts.
+    if not value:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%m/%d/%Y %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _row_value(row: list[str], index: int) -> Optional[str]:
+    # Mirrors csv.DictReader's "missing trailing fields -> None" behaviour
+    # for the positional parsing load_sheet_export_csv needs (its 5th
+    # column has no header name to key a DictReader off).
+    return row[index] if index < len(row) else None
+
+
 def load_https_payload_csv(path: str) -> list[Reading]:
     """Load readings logged in the HTTPS-payload schema (mock Sheet).
 
@@ -132,6 +154,49 @@ def load_sd_datacsv(path: str) -> list[Reading]:
     return readings
 
 
+def load_sheet_export_csv(path: str) -> list[Reading]:
+    """Load readings from the real Google Sheet's CSV export.
+
+    Expected column ORDER - matched by position, not name, because the
+    real export's 5th column has no header text at all: Timestamp,
+    MQ135, Temp, Humidity, Pressure. Timestamp is Google Sheets' US
+    locale format (M/D/YYYY H:MM:SS), not ISO8601. This schema has no
+    trial/source/device_ts/lux/gas_base/gas_increase/risk columns, so
+    those fields are always None - narrower than load_https_payload_csv.
+
+    Raises ValueError naming the file, row, and offending value if
+    Timestamp is missing, blank, or unparseable, for the same reason
+    load_https_payload_csv guards server_ts.
+    """
+    readings: list[Reading] = []
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        next(reader, None)  # header
+        for row_number, row in enumerate(reader, start=2):
+            raw_ts = _row_value(row, 0)
+            server_ts = _parse_sheet_export_ts(raw_ts)
+            if server_ts is None:
+                raise ValueError(
+                    f"{path}: row {row_number} has an invalid or missing "
+                    f"Timestamp: {raw_ts!r}"
+                )
+            readings.append(Reading(
+                server_ts=server_ts,
+                device_ts=None,
+                trial=None,
+                source=None,
+                temp_c=_parse_float(_row_value(row, 2)),
+                humidity_pct=_parse_float(_row_value(row, 3)),
+                pressure_hpa=_parse_float(_row_value(row, 4)),
+                lux=None,
+                mq135_raw=_parse_float(_row_value(row, 1)),
+                gas_base=None,
+                gas_increase=None,
+                risk=None,
+            ))
+    return readings
+
+
 _PREDICTION_FIELDS = [
     "run_ts", "equivalent_hours", "pct_shelf_life_used", "remaining_hours",
     "predicted_use_by", "predicted_use_by_earliest", "predicted_use_by_latest",
@@ -141,6 +206,31 @@ _PREDICTION_FIELDS = [
 ]
 
 
+def _prediction_row_values(row: PredictionRow) -> list:
+    return [
+        row.run_ts.isoformat(),
+        row.equivalent_hours,
+        row.pct_shelf_life_used,
+        row.remaining_hours,
+        row.predicted_use_by.isoformat(),
+        row.predicted_use_by_earliest.isoformat(),
+        row.predicted_use_by_latest.isoformat(),
+        row.status,
+        row.mq135_gas_increase,
+        row.mq135_disagrees,
+        row.gap_count,
+        row.dropped_reading_count,
+        row.q10_range_exceeded_count,
+        row.t_ref_c,
+        row.l_ref_hours,
+        row.q10,
+        row.q10_band_low,
+        row.q10_band_high,
+        row.forecast_window_hours,
+        row.config_version,
+    ]
+
+
 def write_prediction_row(path: str, row: PredictionRow) -> None:
     """Append one prediction to the predictions CSV, writing a header first."""
     is_new = not os.path.exists(path)
@@ -148,25 +238,30 @@ def write_prediction_row(path: str, row: PredictionRow) -> None:
         writer = csv.writer(f)
         if is_new:
             writer.writerow(_PREDICTION_FIELDS)
-        writer.writerow([
-            row.run_ts.isoformat(),
-            row.equivalent_hours,
-            row.pct_shelf_life_used,
-            row.remaining_hours,
-            row.predicted_use_by.isoformat(),
-            row.predicted_use_by_earliest.isoformat(),
-            row.predicted_use_by_latest.isoformat(),
-            row.status,
-            row.mq135_gas_increase,
-            row.mq135_disagrees,
-            row.gap_count,
-            row.dropped_reading_count,
-            row.q10_range_exceeded_count,
-            row.t_ref_c,
-            row.l_ref_hours,
-            row.q10,
-            row.q10_band_low,
-            row.q10_band_high,
-            row.forecast_window_hours,
-            row.config_version,
-        ])
+        writer.writerow(_prediction_row_values(row))
+
+
+def append_daily_prediction(path: str, row: PredictionRow) -> bool:
+    """Append `row` to a once-per-day predictions CSV - the mock of the
+    Sheet's "Predictions" tab, one row per calendar day rather than one
+    per raw reading.
+
+    Idempotent against being re-run the same day (e.g. a daily trigger
+    firing twice, or a manual re-run): if the last row already written
+    has the same `run_ts.date()` as `row`, nothing is written. Returns
+    True if a row was written, False if skipped as a same-day duplicate.
+    """
+    is_new = not os.path.exists(path)
+    if not is_new:
+        with open(path, newline="", encoding="utf-8") as f:
+            last = None
+            for last in csv.DictReader(f):
+                pass
+        if last is not None and datetime.fromisoformat(last["run_ts"]).date() == row.run_ts.date():
+            return False
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(_PREDICTION_FIELDS)
+        writer.writerow(_prediction_row_values(row))
+    return True

@@ -12,12 +12,19 @@ from datetime import datetime
 from typing import Optional
 
 from prediction import config
-from prediction.data_io import load_https_payload_csv, load_sd_datacsv, write_prediction_row
+from prediction.data_io import (
+    append_daily_prediction,
+    load_https_payload_csv,
+    load_sd_datacsv,
+    load_sheet_export_csv,
+    write_prediction_row,
+)
 from prediction.pipeline import q10_discrepancy_message, resolve_food_start, run_prediction
 
 _LOADERS = {
     "https": load_https_payload_csv,
     "datacsv": load_sd_datacsv,
+    "sheetexport": load_sheet_export_csv,
 }
 
 
@@ -25,10 +32,22 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Predict a use-by date from logged sensor readings.")
     parser.add_argument("--readings", required=True, help="path to the readings CSV")
     parser.add_argument(
-        "--format", choices=["https", "datacsv"], default="https",
-        help="https = mock/real Sheet schema (default), datacsv = SD card DATA.CSV schema",
+        "--format", choices=["https", "datacsv", "sheetexport"], default="https",
+        help=(
+            "https = mock HTTPS-payload schema (default), datacsv = SD card "
+            "DATA.CSV schema, sheetexport = the real Sheet's actual CSV "
+            "export schema (Timestamp, MQ135, Temp, Humidity, Pressure)"
+        ),
     )
     parser.add_argument("--predictions-out", default="predictions.csv", help="CSV to append the result to")
+    parser.add_argument(
+        "--once-per-day", action="store_true",
+        help=(
+            "write to --predictions-out through the once-per-day gate "
+            "(skips the write if a prediction for today was already "
+            "recorded) instead of appending unconditionally"
+        ),
+    )
     parser.add_argument("--trial", default=None, help="only use readings for this trial name")
     parser.add_argument(
         "--food-start", default=None,
@@ -56,7 +75,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     readings = sorted((r for r in readings if r.server_ts >= start), key=lambda r: r.server_ts)
 
     row = run_prediction(readings, now)
-    write_prediction_row(args.predictions_out, row)
+    if args.once_per_day:
+        if not append_daily_prediction(args.predictions_out, row):
+            print(f"Skipped: a prediction for {row.run_ts.date()} was already recorded.")
+    else:
+        write_prediction_row(args.predictions_out, row)
 
     print(f"Status: {row.status}")
     print(

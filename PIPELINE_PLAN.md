@@ -7,7 +7,7 @@ ESP32 device  --Wi-Fi-->  Google Sheet  --Q10 model-->  predicted use-by date
                                          --daily-->       Telegram message
 ```
 
-Last updated: 12 Oct 2026. Branch: `dev`.
+Last updated: 13 Oct 2026. Branch: `dev`.
 
 ## Team split (as of 12 Oct)
 
@@ -17,9 +17,10 @@ Last updated: 12 Oct 2026. Branch: `dev`.
   own the device↔Sheet communication, drawing on their prior-assignment MQTT/Wi-Fi
   experience. They have not yet confirmed whether writing to the Sheet is actually
   working end-to-end.
-- **Neela** holds the real Google Sheet's link — not yet shared with Marcus. The
-  prediction model is being built and tested against mock data in the meantime (see
-  below); nobody has swapped in the real Sheet yet.
+- **Neela** held the real Google Sheet's link. As of 13 Oct Marcus has the link and
+  can view it (see "What changed 13 Oct" below) - not yet confirmed whether Neela
+  shared it or how. The prediction model is still being tested against mock data,
+  now reshaped to match the real Sheet's actual (narrower) schema.
 
 ## What exists today
 
@@ -31,6 +32,42 @@ Last updated: 12 Oct 2026. Branch: `dev`.
 | Apps Script (writes the Sheet) | *not in this repo* | Deployed in a teammate's Google account. **Still unverified** — nobody on our side has read its code. Treat every assumption about its column names/logic as unverified until that happens. |
 | Prediction model | `prediction/` (Python package) | **Done and merged to `dev`** (12 Oct). Q10 temperature-acceleration model, CLI entry point, 29 passing tests. Tested against a synthetic mock CSV, not the real Sheet (which doesn't exist for us yet — see team split above). Architecture note: this ended up as a standalone Python script/CLI rather than living inside Apps Script as originally sketched on 6 Oct — see below. |
 | Daily alert | — | Doesn't exist yet. |
+
+## What changed 13 Oct
+
+- **The real Google Sheet is now visible** (link shared, viewer access). Its actual
+  CSV export columns are `Timestamp, MQ135, Temp, Humidity`, plus a 5th column with
+  **no header text at all** (pressure) - narrower than the HTTPS-payload schema the
+  firmware sends and `mock_sheet.csv` was built against (no `trial`, `source`,
+  `device_ts`, `lux`, `gas_base`, `gas_increase`, or `risk`). 82 rows of real logged
+  data were visible as of 13 Oct, most recent same-day, confirming the device is
+  actively writing to it (teammates' earlier uncertainty about this - see team split
+  above - appears resolved, though nobody has said so explicitly yet).
+- **Added `load_sheet_export_csv`** (`prediction/data_io.py`) to read this real
+  schema directly (matches the unnamed 5th column by position; parses Google Sheets'
+  `M/D/YYYY H:MM:SS` export timestamp format, not ISO8601). The core Q10 math only
+  needs timestamp + temperature, so this schema is usable - the MQ-135
+  cross-check just has nothing to compare against (`gas_increase` is always `None`).
+  New `--format sheetexport` CLI option; `mock_data/mock_sheet_export.csv` added to
+  test against this schema without touching the real Sheet.
+- **Added `--once-per-day`** (CLI) / `append_daily_prediction` (`data_io.py`): gates
+  the predictions-CSV write so a prediction already recorded for today's date isn't
+  duplicated by a re-run. Models the daily-trigger idempotency the real integration
+  will need, independent of which system ends up calling it (open risk #7, still
+  undesigned).
+- **Built a mock integration demo**: a separate Google Sheet
+  ([ENG30002 Mock Sheet - Use-By Prediction Test](https://docs.google.com/spreadsheets/d/15nJFeiWWUjmWQ15zZwktGYCAO02tjCmMEXxL_6cHhgU/edit))
+  with a "Readings" tab mirroring the real schema and a
+  "Predictions" tab showing 3 days of `--once-per-day` output (Fresh -> Use soon ->
+  Past use-by as the mock data warms from fridge to room temperature) - answers "what
+  would the daily column look like" without writing to the real Sheet or needing
+  Sheets API/Apps Script access yet. Decision: predictions live in their own tab
+  (one row/day), not a column on the Readings tab (one row per ~30s-30min reading),
+  to avoid mixing per-reading and per-day data in one table.
+- **Open risk #1 partially resolved**: the Sheet's *output* is now visible, so its
+  real column layout is confirmed (above). The Apps Script's *source* is still
+  unverified - don't assume anything about how those columns get written, just that
+  they do.
 
 ## Decisions made 12 Oct
 
@@ -111,7 +148,13 @@ Last updated: 12 Oct 2026. Branch: `dev`.
 
 ## Open risks
 
-1. **Apps Script is unverified.** Nobody but the teammate has seen its code. This blocks the Telegram/trigger work, and now also blocks pointing the prediction model at real data instead of mock data. **Needs resolving ASAP** — get edit access or a source dump from the teammate. If that slips, fallback is standing up our own Apps Script from `google-sheet.ino`'s pattern.
+1. **Apps Script is unverified.** Nobody but the teammate has seen its code. As of 13
+   Oct the Sheet it *writes* is visible (see "What changed 13 Oct" above), which
+   unblocks pointing the prediction model at real data, but the script's *source*
+   still isn't - this still blocks the Telegram/trigger work (it's the thing that
+   would own a daily trigger if that's where it ends up living). **Needs resolving
+   ASAP** — get edit access or a source dump from the teammate. If that slips,
+   fallback is standing up our own Apps Script from `google-sheet.ino`'s pattern.
 2. Ground-truth spoilage labels are informal; biolab approval is pending and may not land before 26 Oct. MAE may end up qualitative/limitation-only.
 3. MQ135 temperature/humidity cross-sensitivity still confounds the 4°C vs 20°C comparison (inherent sensor limitation, not fixable in software).
 4. The HTTPS call uses `client.setInsecure()` (skips TLS certificate validation) — accepted practical risk on a trusted LAN, called out as a limitation in the report rather than fixed.
@@ -125,15 +168,21 @@ Last updated: 12 Oct 2026. Branch: `dev`.
 **Week 1 (6–12 Oct)**
 - [x] 6 Oct — Firmware HTTPS path added, committed to `dev`.
 - [x] 12 Oct — Prediction model (`prediction/` Python package) built, tested against mock data, merged to `dev`. Done ahead of the original Week 2 slot, against mock data since the real Sheet still isn't accessible.
-- [ ] Get teammate (Neela) to share the real Sheet link; confirm with whoever owns the Apps Script that its columns match what the firmware sends.
+- [x] 13 Oct — Real Sheet link shared; confirmed its columns do **not** match the
+  HTTPS-payload schema (see "What changed 13 Oct" above). Whoever owns the Apps
+  Script still hasn't confirmed this from their side - the column layout was
+  reverse-engineered from the Sheet's output, not confirmed against the script.
 - [ ] Bench-test the firmware's HTTPS payload against the live endpoint, once reachable.
 - [ ] Decide the Telegram integration shape now that the model is a standalone script, not Apps Script (open risk #7).
 
 **Week 2 (13–19 Oct)**
 - [x] ~~13–15 Oct — Implement Q10 prediction logic in Apps Script.~~ Superseded — done
   12 Oct as a standalone Python package instead (see "What changed 12 Oct" above).
-- [ ] 13–15 Oct — Point `prediction/cli.py` at the real Sheet CSV export once Neela
-  shares the link; confirm its columns against the HTTPS-payload schema.
+- [x] 13 Oct — Point `prediction/cli.py` at the real Sheet CSV export schema
+  (`--format sheetexport`); confirmed its columns are narrower than the
+  HTTPS-payload schema, not matching (see "What changed 13 Oct" above). Still
+  running against a mock (`mock_sheet_export.csv`) and a mock integration Sheet, not
+  a live CSV export of the real Sheet yet.
 - [ ] 15–16 Oct — Wire Telegram push + scheduling (cron/Task Scheduler for the Python
   CLI, or still via Apps Script — decide per open risk #7); secrets into whichever
   side owns the Telegram call.
