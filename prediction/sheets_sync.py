@@ -1,0 +1,77 @@
+"""The only module in this package that talks to the Google Sheets API.
+
+Isolated here so every other module stays testable without live Google
+credentials or network access - see
+docs/superpowers/specs/2026-10-13-sheets-write-back-design.md section 2.
+No pytest tests exist for this module (same spec, section 5); see
+prediction/README.md "Manual smoke test" for how to verify it by hand.
+"""
+from __future__ import annotations
+
+import json
+from datetime import date, datetime
+from typing import Optional
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+from prediction.data_io import PREDICTION_FIELDS, prediction_row_values
+from prediction.models import PredictionRow
+
+_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+_READINGS_RANGE = "Readings!A2:E"
+_PREDICTIONS_DATE_RANGE = "Predictions!A2:A"
+_PREDICTIONS_APPEND_RANGE = "Predictions!A1"
+_PREDICTIONS_HEADER_CHECK_RANGE = "Predictions!A1:A1"
+
+
+def load_credentials(key_json: str):
+    """Build Sheets API credentials from a service-account JSON key's
+    content (the value of the GOOGLE_SERVICE_ACCOUNT_KEY secret), not a
+    file path - the key never touches disk in the GitHub Actions runner."""
+    info = json.loads(key_json)
+    return service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
+
+
+def _service(credentials):
+    return build("sheets", "v4", credentials=credentials, cache_discovery=False)
+
+
+def read_readings_rows(spreadsheet_id: str, credentials) -> list[list[str]]:
+    result = (
+        _service(credentials).spreadsheets().values()
+        .get(spreadsheetId=spreadsheet_id, range=_READINGS_RANGE)
+        .execute()
+    )
+    return result.get("values", [])
+
+
+def read_last_prediction_date(spreadsheet_id: str, credentials) -> Optional[date]:
+    result = (
+        _service(credentials).spreadsheets().values()
+        .get(spreadsheetId=spreadsheet_id, range=_PREDICTIONS_DATE_RANGE)
+        .execute()
+    )
+    values = result.get("values", [])
+    if not values:
+        return None
+    return datetime.fromisoformat(values[-1][0]).date()
+
+
+def append_prediction_row(spreadsheet_id: str, credentials, row: PredictionRow) -> None:
+    sheet = _service(credentials).spreadsheets()
+    existing = sheet.values().get(
+        spreadsheetId=spreadsheet_id, range=_PREDICTIONS_HEADER_CHECK_RANGE
+    ).execute()
+    is_new = not existing.get("values")
+
+    body_rows = [PREDICTION_FIELDS] if is_new else []
+    body_rows.append([str(v) for v in prediction_row_values(row)])
+
+    sheet.values().append(
+        spreadsheetId=spreadsheet_id,
+        range=_PREDICTIONS_APPEND_RANGE,
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": body_rows},
+    ).execute()
