@@ -35,6 +35,16 @@ Last updated: 13 Oct 2026. Branch: `dev`.
 
 ## What changed 13 Oct
 
+- **Unattended daily Sheet write-back implemented** (code complete, not yet activated).
+  `prediction/sheets_daily_run.py` + `.github/workflows/daily-prediction.yml` run the
+  prediction at 8am/8pm Sydney time via GitHub Actions and the Google Sheets API,
+  writing one row per day to the real Sheet's Predictions tab - see
+  `docs/superpowers/specs/2026-10-13-sheets-write-back-design.md` for the design and
+  `prediction/README.md` "Unattended daily write-back" for setup. **Not live yet**:
+  needs the one-time Google Cloud service-account setup and the real Sheet's owner to
+  grant that service account Editor access (`prediction/README.md` step 2) before the
+  schedule will actually write anything. Open risk #7 (Telegram integration shape) is
+  unaffected - still open, explicitly out of scope for this write-back.
 - **The real Google Sheet is now visible** (link shared, viewer access). Its actual
   CSV export columns are `Timestamp, MQ135, Temp, Humidity`, plus a 5th column with
   **no header text at all** (pressure) - narrower than the HTTPS-payload schema the
