@@ -8,3 +8,6 @@ __pycache__/
 # not a deliverable)
 prediction/predictions.csv
 predictions.csv
+
+# Isolated workspaces for subagent-driven-development plan execution
+.worktrees/
