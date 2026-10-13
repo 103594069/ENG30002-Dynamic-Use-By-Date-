@@ -82,6 +82,31 @@ Last updated: 13 Oct 2026. Branch: `dev`.
   unverified - don't assume anything about how those columns get written, just that
   they do.
 
+## What changed 13 Oct (later session: docs + demo sheet polish)
+
+- **README.md restructured for readability** - broke the dense "How it works"
+  paragraphs into a status-at-a-glance table and scannable bullets, and added
+  `telegram-bot-integration` to the repo layout table (it's now present at the repo
+  root but wasn't mentioned anywhere). Pushed to `dev`.
+- **Mock demo Sheet's Predictions tab simplified**: dropped the "% Shelf Life Used"
+  column at Marcus's request - the "Predicted Use-By" column already carries an
+  actual date, so the percentage was redundant. Tab now reads Date / Predicted
+  Use-By / Earliest / Latest / Status / Equivalent Hours / Run Timestamp.
+- **Re-ran the prediction model against the mock Sheet's data** two ways: once
+  over the full 3-day `mock_sheet_export.csv` as a sanity check (confirmed
+  unchanged: Past use-by, 85.8/48h), then as three separate simulated
+  `--once-per-day` runs (readings truncated to each day, `--now` set to 22:00 that
+  day) matching the methodology the demo tab's own note describes. The fresh CLI
+  output matched the existing hand-entered rows almost exactly, confirming the
+  model hasn't drifted; the three Predictions-tab rows were overwritten with the
+  precise values straight from this run.
+- **Published a team-shareable explainer**: a Claude Docs page, "How the
+  Prediction Model Works" - a 5-step pipeline diagram (readings → clean →
+  accumulate → compare to 48h → project date) plus the Q10 formula and why every
+  prediction is a range, not a single date. Not linked here since Claude Docs
+  artifacts are private-by-default and not yet shared with the team; ask Marcus
+  for the link if you need it.
+
 ## Decisions made 12 Oct
 
 - **Prediction model lives in its own Python package (`prediction/`), not Apps
