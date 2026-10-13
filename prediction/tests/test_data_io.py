@@ -3,6 +3,7 @@ from datetime import datetime
 import pytest
 
 from prediction.data_io import (
+    _parse_sheet_export_rows,
     append_daily_prediction,
     load_https_payload_csv,
     load_sd_datacsv,
@@ -27,6 +28,31 @@ SHEET_EXPORT_CSV = """Timestamp,MQ135,Temp,Humidity,
 10/6/2026 17:52:57,133,18.72,52.85,1014.12
 10/6/2026 17:55:39,112,19.13,51.23,1014.17
 """
+
+
+def test_parse_sheet_export_rows_parses_known_fields_by_position():
+    rows = [["10/6/2026 17:52:57", "133", "18.72", "52.85", "1014.12"]]
+
+    readings = _parse_sheet_export_rows(rows, "Google Sheets API read")
+
+    assert len(readings) == 1
+    r = readings[0]
+    assert r.server_ts == datetime(2026, 10, 6, 17, 52, 57)
+    assert r.mq135_raw == 133
+    assert r.temp_c == 18.72
+    assert r.humidity_pct == 52.85
+    assert r.pressure_hpa == 1014.12
+
+
+def test_parse_sheet_export_rows_rejects_a_malformed_timestamp_with_the_given_label():
+    rows = [["2026-10-06T17:52:57", "133", "18.72", "52.85", "1014.12"]]
+
+    with pytest.raises(ValueError) as excinfo:
+        _parse_sheet_export_rows(rows, "Google Sheets API read")
+
+    message = str(excinfo.value)
+    assert "Google Sheets API read" in message
+    assert "row 2" in message
 
 
 def test_load_https_payload_csv_parses_known_fields_and_blanks(tmp_path):

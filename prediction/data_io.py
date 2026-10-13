@@ -154,6 +154,40 @@ def load_sd_datacsv(path: str) -> list[Reading]:
     return readings
 
 
+def _parse_sheet_export_rows(rows, source_label: str) -> list[Reading]:
+    """Parse rows already split out of the real Sheet's export schema.
+
+    `rows` excludes the header; `source_label` replaces the file path in
+    error messages (e.g. "Google Sheets API read" when called from
+    sheets_daily_run.py instead of a local file) - see
+    load_sheet_export_csv's docstring for the schema this expects.
+    """
+    readings: list[Reading] = []
+    for row_number, row in enumerate(rows, start=2):
+        raw_ts = _row_value(row, 0)
+        server_ts = _parse_sheet_export_ts(raw_ts)
+        if server_ts is None:
+            raise ValueError(
+                f"{source_label}: row {row_number} has an invalid or missing "
+                f"Timestamp: {raw_ts!r}"
+            )
+        readings.append(Reading(
+            server_ts=server_ts,
+            device_ts=None,
+            trial=None,
+            source=None,
+            temp_c=_parse_float(_row_value(row, 2)),
+            humidity_pct=_parse_float(_row_value(row, 3)),
+            pressure_hpa=_parse_float(_row_value(row, 4)),
+            lux=None,
+            mq135_raw=_parse_float(_row_value(row, 1)),
+            gas_base=None,
+            gas_increase=None,
+            risk=None,
+        ))
+    return readings
+
+
 def load_sheet_export_csv(path: str) -> list[Reading]:
     """Load readings from the real Google Sheet's CSV export.
 
@@ -168,36 +202,13 @@ def load_sheet_export_csv(path: str) -> list[Reading]:
     Timestamp is missing, blank, or unparseable, for the same reason
     load_https_payload_csv guards server_ts.
     """
-    readings: list[Reading] = []
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
         next(reader, None)  # header
-        for row_number, row in enumerate(reader, start=2):
-            raw_ts = _row_value(row, 0)
-            server_ts = _parse_sheet_export_ts(raw_ts)
-            if server_ts is None:
-                raise ValueError(
-                    f"{path}: row {row_number} has an invalid or missing "
-                    f"Timestamp: {raw_ts!r}"
-                )
-            readings.append(Reading(
-                server_ts=server_ts,
-                device_ts=None,
-                trial=None,
-                source=None,
-                temp_c=_parse_float(_row_value(row, 2)),
-                humidity_pct=_parse_float(_row_value(row, 3)),
-                pressure_hpa=_parse_float(_row_value(row, 4)),
-                lux=None,
-                mq135_raw=_parse_float(_row_value(row, 1)),
-                gas_base=None,
-                gas_increase=None,
-                risk=None,
-            ))
-    return readings
+        return _parse_sheet_export_rows(reader, path)
 
 
-_PREDICTION_FIELDS = [
+PREDICTION_FIELDS = [
     "run_ts", "equivalent_hours", "pct_shelf_life_used", "remaining_hours",
     "predicted_use_by", "predicted_use_by_earliest", "predicted_use_by_latest",
     "status", "mq135_gas_increase", "mq135_disagrees", "gap_count",
@@ -206,7 +217,7 @@ _PREDICTION_FIELDS = [
 ]
 
 
-def _prediction_row_values(row: PredictionRow) -> list:
+def prediction_row_values(row: PredictionRow) -> list:
     return [
         row.run_ts.isoformat(),
         row.equivalent_hours,
@@ -237,8 +248,8 @@ def write_prediction_row(path: str, row: PredictionRow) -> None:
     with open(path, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if is_new:
-            writer.writerow(_PREDICTION_FIELDS)
-        writer.writerow(_prediction_row_values(row))
+            writer.writerow(PREDICTION_FIELDS)
+        writer.writerow(prediction_row_values(row))
 
 
 def append_daily_prediction(path: str, row: PredictionRow) -> bool:
@@ -262,6 +273,6 @@ def append_daily_prediction(path: str, row: PredictionRow) -> bool:
     with open(path, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if is_new:
-            writer.writerow(_PREDICTION_FIELDS)
-        writer.writerow(_prediction_row_values(row))
+            writer.writerow(PREDICTION_FIELDS)
+        writer.writerow(prediction_row_values(row))
     return True
