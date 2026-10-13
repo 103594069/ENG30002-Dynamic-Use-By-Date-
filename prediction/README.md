@@ -44,6 +44,46 @@ per-reading column nonsensical at a ~30s-30min logging interval), is in the
 for the link. Wiring an actual write-back to the live Sheet (Apps Script trigger vs.
 Python pushing via the Sheets API) is still undesigned - see open risk #7.
 
+### Unattended daily write-back (GitHub Actions)
+
+`sheets_daily_run.py` + `.github/workflows/daily-prediction.yml` run the prediction
+automatically at 8am and 8pm Sydney time, writing one row per day to the real Sheet's
+"Predictions" tab via the Google Sheets API. See
+`docs/superpowers/specs/2026-10-13-sheets-write-back-design.md` for the full design.
+
+**One-time setup, before the schedule will work:**
+
+1. In Google Cloud Console, create a project (or reuse one), enable the "Google Sheets
+   API", and create a service account. Download its JSON key.
+2. In the real Sheet, click Share and add the service account's email (ends in
+   `...gserviceaccount.com`, found on its Google Cloud Console page) as an **Editor**.
+   (The Sheets API only supports whole-file sharing, not per-tab — there's no way to
+   grant it write access to Predictions without also granting it Readings, even though
+   it only ever reads Readings. Flagged as an open question in the design spec; Editor
+   on the whole file is the only option, so there's nothing to decide here in practice.)
+3. In this repo's GitHub settings: Settings -> Secrets and variables -> Actions ->
+   New repository secret, name `GOOGLE_SERVICE_ACCOUNT_KEY`, paste the entire contents
+   of the downloaded JSON key file.
+4. Same page, "Variables" tab -> New repository variable, name `SPREADSHEET_ID`, value
+   is the real Sheet's ID (the long string in its URL between `/d/` and `/edit`).
+5. Confirm the Sheet has a tab literally named `Readings` (matching the schema in "The
+   real Sheet" above) and a tab literally named `Predictions` (can start empty -
+   `append_prediction_row` writes the header on its first run).
+
+**Manual smoke test**, to run once after setup and after any change to
+`sheets_sync.py` (this module has no automated tests - see the design spec, section 5):
+
+1. Go to this repo's Actions tab -> "Daily use-by prediction" -> "Run workflow" (this
+   works because of `workflow_dispatch` in the workflow file - no need to wait for
+   8am/8pm).
+2. Check the run's log: it should either print `Status: ...` and `Predicted use-by:
+   ...` (a row was written) or `Skipped: a prediction for <today> was already
+   recorded.` (if you've already run it today).
+3. Open the real Sheet's Predictions tab and confirm a new row appeared with today's
+   date in its first column, matching the log output.
+4. Run the workflow a second time the same day and confirm it logs `Skipped: ...` and
+   does **not** add a second row - this is the once-per-day gate working.
+
 ## Scheduling
 
 Run once or twice a day:
