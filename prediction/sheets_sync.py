@@ -66,8 +66,11 @@ def append_prediction_row(spreadsheet_id: str, credentials, row: PredictionRow) 
     is_new = not existing.get("values")
 
     body_rows = [PREDICTION_FIELDS] if is_new else []
-    body_rows.append([str(v) for v in prediction_row_values(row)])
+    body_rows.append(["" if v is None else str(v) for v in prediction_row_values(row)])
 
+    # RAW, not USER_ENTERED: keeps run_ts stored as the exact ISO string
+    # read_last_prediction_date parses back with datetime.fromisoformat - a
+    # well-meaning switch to USER_ENTERED would silently break that.
     sheet.values().append(
         spreadsheetId=spreadsheet_id,
         range=_PREDICTIONS_APPEND_RANGE,

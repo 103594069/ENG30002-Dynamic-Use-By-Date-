@@ -59,3 +59,15 @@ def test_run_propagates_a_malformed_reading_error():
 
     with pytest.raises(ValueError, match="row 2"):
         sheets_daily_run.run("sheet123", "fake-creds", sync=fake, now=now)
+
+
+def test_run_uses_sydney_date_not_utc_date_for_the_gate():
+    # 9am Sydney on Oct 6 is 10pm UTC on Oct 5 - if the gate ever used the UTC date
+    # instead of the Sydney date, this would wrongly match last_date and skip.
+    now = datetime(2026, 10, 6, 9, 0, 0, tzinfo=SYDNEY)
+    fake = _FakeSync(rows=ROWS, last_date=date(2026, 10, 5))
+
+    result = sheets_daily_run.run("sheet123", "fake-creds", sync=fake, now=now)
+
+    assert result is True
+    assert fake.appended[0].run_ts.date() == date(2026, 10, 6)

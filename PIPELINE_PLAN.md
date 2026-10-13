@@ -41,10 +41,13 @@ Last updated: 13 Oct 2026. Branch: `dev`.
   writing one row per day to the real Sheet's Predictions tab - see
   `docs/superpowers/specs/2026-10-13-sheets-write-back-design.md` for the design and
   `prediction/README.md` "Unattended daily write-back" for setup. **Not live yet**:
-  needs the one-time Google Cloud service-account setup and the real Sheet's owner to
-  grant that service account Editor access (`prediction/README.md` step 2) before the
-  schedule will actually write anything. Open risk #7 (Telegram integration shape) is
-  unaffected - still open, explicitly out of scope for this write-back.
+  needs the one-time Google Cloud service-account setup, the real Sheet's owner
+  granting that service account Editor access (`prediction/README.md` step 2), the
+  food-start time set (`prediction/README.md` step 6), and the workflow file to
+  be on the repo's default branch (GitHub Actions `schedule` triggers don't fire from any
+  other branch) before the schedule will actually write anything. Open risk #7 (Telegram
+  integration shape) is unaffected - still open, explicitly out of scope for this
+  write-back.
 - **The real Google Sheet is now visible** (link shared, viewer access). Its actual
   CSV export columns are `Timestamp, MQ135, Temp, Humidity`, plus a 5th column with
   **no header text at all** (pressure) - narrower than the HTTPS-payload schema the

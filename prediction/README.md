@@ -41,8 +41,9 @@ Sheet. A live demo of what the once-per-day output looks like, structured as a
 separate "Predictions" tab next to a "Readings" tab (one row per reading would make a
 per-reading column nonsensical at a ~30s-30min logging interval), is in the
 "ENG30002 Mock Sheet - Use-By Prediction Test" Google Sheet - see `PIPELINE_PLAN.md`
-for the link. Wiring an actual write-back to the live Sheet (Apps Script trigger vs.
-Python pushing via the Sheets API) is still undesigned - see open risk #7.
+for the link. See "Unattended daily write-back (GitHub Actions)" below for how
+predictions actually reach the Sheet now. (Open risk #7 is the separate, still-
+undesigned Telegram alert - not this write-back.)
 
 ### Unattended daily write-back (GitHub Actions)
 
@@ -52,6 +53,11 @@ automatically at 8am and 8pm Sydney time, writing one row per day to the real Sh
 `docs/superpowers/specs/2026-10-13-sheets-write-back-design.md` for the full design.
 
 **One-time setup, before the schedule will work:**
+
+(Also note: GitHub Actions `schedule` triggers only fire once this workflow file is on
+the repository's **default branch** — `workflow_dispatch`, used by the smoke test below,
+works from any branch, so a passing smoke test does not by itself mean the twice-daily
+cron is live.)
 
 1. In Google Cloud Console, create a project (or reuse one), enable the "Google Sheets
    API", and create a service account. Download its JSON key.
@@ -69,6 +75,10 @@ automatically at 8am and 8pm Sydney time, writing one row per day to the real Sh
 5. Confirm the Sheet has a tab literally named `Readings` (matching the schema in "The
    real Sheet" above) and a tab literally named `Predictions` (can start empty -
    `append_prediction_row` writes the header on its first run).
+6. Set `config.FOOD_START_TS` to when the food actually went into the enclosure before
+   activating the schedule — the unattended run has no `--food-start` override like the
+   CLI does, so leaving it `None` makes the oldest row in the Readings tab the food-start
+   (which, as of 13 Oct, includes pre-trial bench-test data).
 
 **Manual smoke test**, to run once after setup and after any change to
 `sheets_sync.py` (this module has no automated tests - see the design spec, section 5):
