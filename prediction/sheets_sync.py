@@ -19,7 +19,7 @@ from prediction.data_io import PREDICTION_FIELDS, prediction_row_values
 from prediction.models import PredictionRow
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-_READINGS_RANGE = "Readings!A2:E"
+_READINGS_RANGE = "Sheet1!A2:E"
 _PREDICTIONS_DATE_RANGE = "Predictions!A2:A"
 _PREDICTIONS_APPEND_RANGE = "Predictions!A1"
 _PREDICTIONS_HEADER_CHECK_RANGE = "Predictions!A1:A1"
