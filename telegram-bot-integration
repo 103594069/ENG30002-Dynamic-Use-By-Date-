@@ -1,0 +1,99 @@
+"""
+Poll a Google Sheet every 30 seconds and send the newest status to Telegram.
+
+- First scan: checks the newest (last filled) cell in the sheet.
+- Later scans: checks any cell that was added or changed since the last scan,
+  or reports "no change in data since last scan" if nothing changed.
+- Each value is turned into a status:
+    1 -> safe, 2 -> borderline, 3 -> spoiled, anything else -> quack quack data is whack
+- Every status is printed in the terminal AND sent to you as a Telegram message.
+
+REQUIREMENTS
+The sheet must be shared as "Anyone with the link can view"
+
+Usage:
+    python sheet_poller.py                  # scan every 30 seconds
+    python sheet_poller.py --interval 10    # custom interval (seconds)
+    python sheet_poller.py --get-chat-id    # find your chat ID
+    python sheet_poller.py --test-telegram  # send a test message
+"""
+
+import csv
+import io
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime
+
+# settings
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1KEMvxW9yBK-mELOk6q4PxLg5YHd5wGCNQFDKcpSUFQg/export?format=csv&gid=0"
+BOT_TOKEN = "8691025762:AAGTSh8W9V0uOCwE67R1TSxoJewowZ37aOQ"
+CHAT_ID = "8554942918"
+INTERVAL = 30  # seconds between scans
+SEND_NO_CHANGE = False  # change to True to also text "no change" messages
+
+#telegram bot integration
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = urllib.parse.urlencode({"chat_id": CHAT_ID, "text": text}).encode()
+    try:
+        urllib.request.urlopen(url, data=data, timeout=15)
+    except Exception as e:
+        print(f"  (Telegram error: {e})")
+
+#read in values from sheet
+def read_sheet():
+    with urllib.request.urlopen(SHEET_URL, timeout=15) as resp:
+        text = resp.read().decode("utf-8")
+    rows = csv.reader(io.StringIO(text))
+    return {
+        (r, c): value
+        for r, row in enumerate(rows)
+        for c, value in enumerate(row)
+        if value.strip()
+    }
+
+#convert value into message based on legend 
+def status(value):
+    messages = {"1": "safe", "2": "borderline", "3": "spoiled"}
+    return messages.get(value.strip(), "quack quack data is whack")
+
+
+#send message through telegram 
+def report(message, send=True):
+    print(f"[{datetime.now():%H:%M:%S}] {message}")
+    if send:
+        send_telegram(message)
+
+
+last_cells = None
+print(f"Scanning sheet every {INTERVAL}s. Press Ctrl+C to stop.\n")
+
+try:
+    while True:
+        try:
+            cells = read_sheet()
+
+            if last_cells is None:
+                # first scan: report the newest (last filled) cell
+                if cells:
+                    report(status(cells[max(cells)]))
+                else:
+                    report("Sheet is empty")
+            else:
+                changed = sorted(pos for pos in cells if last_cells.get(pos) != cells[pos])
+                if changed:
+                    for pos in changed:
+                        report(status(cells[pos]))
+                else:
+                    report("no change in data since last scan", send=SEND_NO_CHANGE)
+
+            last_cells = cells
+
+        except Exception as e:
+            print(f"Error reading sheet: {e}")
+
+        time.sleep(INTERVAL)
+
+except KeyboardInterrupt:
+    print("\nStopped.")

@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <ctype.h>
 #include <Wire.h>
 #include <SPI.h>
 #include <FS.h>
@@ -11,20 +12,23 @@
 #include <RTClib.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #define sensor_t camera_sensor_t
 #include "esp_camera.h"
 #undef sensor_t
 #include "img_converters.h"
 
-constexpr uint16_t CONFIG_VERSION=1, DEFAULT_MQTT_PORT=1883, DEFAULT_LOG_INTERVAL_MIN=30, DEFAULT_PHOTO_INTERVAL_MIN=30;
-constexpr char DEFAULT_DEVICE_NAME[]="Food Monitor", DEFAULT_WIFI_SSID[]="ASUS_78", DEFAULT_WIFI_PASSWORD[]="mx@t236pmq", DEFAULT_MQTT_SERVER[]="192.168.50.250", DEFAULT_TRIAL_NAME[]="Trial";
+constexpr uint16_t CONFIG_VERSION=2, DEFAULT_MQTT_PORT=1883, DEFAULT_LOG_INTERVAL_MIN=30, DEFAULT_PHOTO_INTERVAL_MIN=30;
+constexpr char DEFAULT_DEVICE_NAME[]="Food Monitor", DEFAULT_WIFI_SSID[]="", DEFAULT_WIFI_PASSWORD[]="", DEFAULT_MQTT_SERVER[]="192.168.50.250", DEFAULT_TRIAL_NAME[]="Trial", DEFAULT_GOOGLE_SCRIPT_URL[]="";
+constexpr uint32_t SHEETS_TIMEOUT_MS=8000;
 constexpr uint32_t LIVE_REFRESH_MS=2000, GRAPH_INTERVAL_MS=5000, SD_CHECK_MS=10000, SD_RECOVERY_CHECK_MS=5000, SD_INIT_HZ=1000000, SD_RECOVERY_HZ=400000;
 constexpr uint8_t SD_RECOVERY_TRIES=3, HIST=64, GAS_BASELINE_SAMPLES=10, ROTATION=3;
 constexpr float TEMP_GRAPH_MIN=10, TEMP_GRAPH_MAX=40, HUM_GRAPH_MIN=0, HUM_GRAPH_MAX=100, PRESS_GRAPH_MIN=950, PRESS_GRAPH_MAX=1050, LIGHT_GRAPH_MIN=0, LIGHT_GRAPH_MAX=5000;
 constexpr float GAS_GRAPH_MIN_RATIO=0.8f, GAS_GRAPH_BASE_MAX_RATIO=6.0f, GAS_CAUTION_RATIO=3.5f, GAS_DANGER_RATIO=5.0f, GAS_BASELINE_STABILITY_FRAC=0.1f;
 constexpr uint32_t GAS_WARMUP_MS=30UL*1000UL, GAS_BASELINE_SAMPLE_MS=5, LONG_PRESS_MS=2000, BOTH_HOLD_MS=5000, DEBOUNCE_MS=40, WIFI_RETRY_MS=10000, MQTT_RETRY_MS=30000;
 const char *MQTT_USER="", *MQTT_PASSWORD="";
-struct AppConfig {char deviceName[32], wifiSsid[33], wifiPassword[65], mqttServer[64]; uint16_t mqttPort; char trialName[32]; uint16_t logIntervalMin, photoIntervalMin;};
+struct AppConfig {char deviceName[32], wifiSsid[33], wifiPassword[65], mqttServer[64]; uint16_t mqttPort; char trialName[32]; uint16_t logIntervalMin, photoIntervalMin; char googleScriptUrl[160];};
 AppConfig cfg;
 unsigned long logIntervalMs(){return (unsigned long)cfg.logIntervalMin*60000UL;}
 unsigned long photoIntervalMs(){return (unsigned long)cfg.photoIntervalMin*60000UL;}
@@ -115,11 +119,11 @@ float gasGraphMaxRatio(){return max(gasGraphCeiling,GAS_GRAPH_BASE_MAX_RATIO);}
 
 void plotRange(uint8_t m,float &lo,float &hi){
   switch(m){
-    case 0: lo=TEMP_GRAPH_MIN; hi=TEMP_GRAPH_MAX; break;
-    case 1: lo=HUM_GRAPH_MIN; hi=HUM_GRAPH_MAX; break;
-    case 2: lo=PRESS_GRAPH_MIN; hi=PRESS_GRAPH_MAX; break;
+    case 0: lo=TEMP_GRAPH_MIN; hi=TEMP_GRAPH_MAX; break; case 1: lo=HUM_GRAPH_MIN; hi=HUM_GRAPH_MAX; break; case 2: lo=PRESS_GRAPH_MIN; hi=PRESS_GRAPH_MAX; break;
     case 3: lo=LIGHT_GRAPH_MIN; hi=LIGHT_GRAPH_MAX; break;
-    case 4: lo=GAS_GRAPH_MIN_RATIO; hi=gasGraphMaxRatio(); break;
+    case 4:
+      lo=GAS_GRAPH_MIN_RATIO; hi=gasGraphMaxRatio();
+      break;
     default: lo=0.0f; hi=1.0f; break;}}
 
 void printValue(float v,uint8_t dec){ if(isfinite(v)) tft.print(v,dec); else tft.print("N/A"); }
@@ -211,6 +215,39 @@ void publishPhotoEvent(const char* filename,size_t bytes){
   char payload[180]; snprintf(payload,sizeof(payload),"{\"file\":\"%s\",\"bytes\":%u,\"risk\":\"%s\",\"trial\":\"%s\"}",filename,(unsigned int)bytes,gasRiskText(),cfg.trialName);
   mqttClient.publish(TOPIC_PHOTO,payload,true);}
 
+DateTime nowRTC();
+String urlEncode(const char* s){
+  String out; char buf[4];
+  for(const char* p=s; *p; p++){
+    unsigned char c=(unsigned char)*p;
+    if(isalnum(c) || c=='-' || c=='_' || c=='.' || c=='~') out+=(char)c;
+    else { snprintf(buf,sizeof(buf),"%%%02X",c); out+=buf; }}
+  return out;}
+
+bool publishToGoogleSheets(const float v[],const char* source){
+  if(!cfg.googleScriptUrl[0] || WiFi.status()!=WL_CONNECTED) return false;
+  DateTime n=nowRTC(); char stamp[32];
+  snprintf(stamp,sizeof(stamp),"%04d-%02d-%02dT%02d:%02d:%02d",n.year(),n.month(),n.day(),n.hour(),n.minute(),n.second());
+  String url=cfg.googleScriptUrl;
+  url+="?mq135="; url+=String((int)lroundf(v[4]));
+  url+="&temp="; url+=String(v[0],2);
+  url+="&humidity="; url+=String(v[1],2);
+  url+="&pressure="; url+=String(v[2],2);
+  url+="&lux="; url+=String(v[3],1);
+  url+="&gas_base="; if(gasCalibrated) url+=String(gasBaseline,0);
+  url+="&gas_increase="; if(gasCalibrated) url+=String(v[4]/gasBaseline,3);
+  url+="&risk="; url+=gasRiskText();
+  url+="&trial="; url+=urlEncode(cfg.trialName);
+  url+="&source="; url+=source;
+  url+="&device_ts="; url+=stamp;
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient http; http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(SHEETS_TIMEOUT_MS);
+  if(!http.begin(client,url)) return false;
+  int code=http.GET(); bool ok=(code>0 && code<400);
+  Serial.print("Sheets HTTP "); Serial.println(code);
+  http.end();
+  return ok;}
+
 void resetSharedSPI(){
   SD.end(); deselectTFT(); deselectSD(); delay(5); SPI.end(); delay(5); SPI.begin(SPI_SCK,SPI_MISO,SPI_MOSI,-1); deselectTFT(); deselectSD(); delay(100);}
 
@@ -245,22 +282,27 @@ bool checkSDPresent(){
   resetSharedSPI(); bool ok=beginSD(SD_RECOVERY_HZ);
   if(ok) unmountSD();
   else {SD.end(); deselectSD();}
-  sdReady=ok; return ok;}
+  sdReady=ok;
+  return ok;}
 
 void applyDefaultConfig(AppConfig &c){
   memset(&c,0,sizeof(c)); strlcpy(c.deviceName,DEFAULT_DEVICE_NAME,sizeof(c.deviceName)); strlcpy(c.wifiSsid,DEFAULT_WIFI_SSID,sizeof(c.wifiSsid));
   strlcpy(c.wifiPassword,DEFAULT_WIFI_PASSWORD,sizeof(c.wifiPassword)); strlcpy(c.mqttServer,DEFAULT_MQTT_SERVER,sizeof(c.mqttServer)); c.mqttPort=DEFAULT_MQTT_PORT;
-  strlcpy(c.trialName,DEFAULT_TRIAL_NAME,sizeof(c.trialName)); c.logIntervalMin=DEFAULT_LOG_INTERVAL_MIN; c.photoIntervalMin=DEFAULT_PHOTO_INTERVAL_MIN;}
+  strlcpy(c.trialName,DEFAULT_TRIAL_NAME,sizeof(c.trialName)); c.logIntervalMin=DEFAULT_LOG_INTERVAL_MIN; c.photoIntervalMin=DEFAULT_PHOTO_INTERVAL_MIN;
+  strlcpy(c.googleScriptUrl,DEFAULT_GOOGLE_SCRIPT_URL,sizeof(c.googleScriptUrl));}
 
 bool validLabel(const char* s,size_t maxLen){
   size_t n=strlen(s); if(n==0||n>maxLen) return false;
-  for(size_t i=0;i<n;i++){char c=s[i]; if(c<32||c>126||c=='"'||c=='\\'||c==','||c=='=') return false;}
+  for(size_t i=0;i<n;i++){
+    char c=s[i];
+    if(c<32||c>126||c=='"'||c=='\\'||c==','||c=='=') return false;}
   return true;}
 
 bool validateConfig(const AppConfig &c){
   if(!validLabel(c.deviceName,sizeof(c.deviceName)-1)) return false;
   if(!validLabel(c.trialName,sizeof(c.trialName)-1)) return false;
   if(strlen(c.wifiSsid)>32||strlen(c.wifiPassword)>64||strlen(c.mqttServer)>63) return false;
+  if(strlen(c.googleScriptUrl)>159) return false;
   if(c.mqttPort==0) return false;
   if(c.logIntervalMin<1||c.logIntervalMin>1440) return false;
   if(c.photoIntervalMin<1||c.photoIntervalMin>1440) return false;
@@ -307,9 +349,11 @@ bool loadConfigFromSD(AppConfig &loaded){
       bit=1u<<7; if(!parseUIntValue(value,1,1440,n)) ok=false; else c.logIntervalMin=(uint16_t)n;
     }else if(key=="PHOTO_INTERVAL_MIN"){
       bit=1u<<8; if(!parseUIntValue(value,1,1440,n)) ok=false; else c.photoIntervalMin=(uint16_t)n;
+    }else if(key=="GOOGLE_SCRIPT_URL"){
+      bit=1u<<9; if(!copyConfigValue(c.googleScriptUrl,sizeof(c.googleScriptUrl),value)) ok=false;
     }else ok=false;
     if(bit){ if(seen&bit) ok=false; else seen|=bit; }}
-  f.close(); unmountSD(); const uint16_t required=(1u<<9)-1u;
+  f.close(); unmountSD(); const uint16_t required=(1u<<10)-1u;
   if(!ok||seen!=required||!validateConfig(c)) return false;
   loaded=c; return true;}
 
@@ -320,6 +364,7 @@ bool writeConfigToSD(const AppConfig &c){
   f.print("CONFIG_VERSION=");f.println(CONFIG_VERSION); f.print("DEVICE_NAME=");f.println(c.deviceName); f.print("WIFI_SSID=");f.println(c.wifiSsid);
   f.print("WIFI_PASSWORD=");f.println(c.wifiPassword); f.print("MQTT_SERVER=");f.println(c.mqttServer); f.print("MQTT_PORT=");f.println(c.mqttPort);
   f.print("TRIAL_NAME=");f.println(c.trialName); f.print("LOG_INTERVAL_MIN=");f.println(c.logIntervalMin); f.print("PHOTO_INTERVAL_MIN=");f.println(c.photoIntervalMin);
+  f.print("GOOGLE_SCRIPT_URL=");f.println(c.googleScriptUrl);
   f.flush(); bool ok=(bool)f; f.close();
   if(ok){ SD.remove("/config.txt"); ok=SD.rename("/config.tmp","/config.txt"); }
   if(!ok) SD.remove("/config.tmp");
@@ -329,7 +374,7 @@ DateTime nowRTC(){ return rtcReady?rtc.now():DateTime(2000,1,1,0,0,0); }
 bool saveMeasurement(const float v[],const char* source){
   if(!mountSD()) return false;
   bool newFile=!SD.exists("/DATA.CSV"); File f=SD.open("/DATA.CSV",FILE_APPEND);
-  if(!f){unmountSD(); sdReady=false; return false;}
+  if(!f){ unmountSD(); sdReady=false; return false; }
   if(newFile) f.println("date,time,trial,temp_C,humidity_pct,pressure_hPa,lux,mq135_raw,mq135_base,mq135_increase,source");
   DateTime n=nowRTC(); char stamp[32]; snprintf(stamp,sizeof(stamp),"%04d-%02d-%02d,%02d:%02d:%02d",n.year(),n.month(),n.day(),n.hour(),n.minute(),n.second());
   f.print(stamp); f.print(','); f.print(cfg.trialName);
@@ -357,7 +402,7 @@ bool initCamera(){
   c.pixel_format=PIXFORMAT_RGB565; c.frame_size=FRAMESIZE_QVGA; c.jpeg_quality=10; c.fb_count=1; c.fb_location=psramFound()?CAMERA_FB_IN_PSRAM:CAMERA_FB_IN_DRAM;
   return esp_camera_init(&c)==ESP_OK;}
 
-enum PhotoCapture : uint8_t {PHOTO_OK, PHOTO_FRAME_FAIL, PHOTO_JPEG_FAIL};
+enum PhotoCapture : uint8_t { PHOTO_OK, PHOTO_FRAME_FAIL, PHOTO_JPEG_FAIL };
 
 uint8_t captureJPEG(uint8_t*& jpg,size_t& len){
   jpg=nullptr; len=0; if(mcpReady)mcp.digitalWrite(MCP_PHOTO_LED,HIGH); delay(300);
@@ -366,7 +411,7 @@ uint8_t captureJPEG(uint8_t*& jpg,size_t& len){
   bool ok=frame2jpg(frame,80,&jpg,&len); esp_camera_fb_return(frame); if(mcpReady)mcp.digitalWrite(MCP_PHOTO_LED,LOW);
   if(!ok||!jpg||!len){ if(jpg){free(jpg);jpg=nullptr;} len=0; return PHOTO_JPEG_FAIL; } return PHOTO_OK;}
 void photoFilename(char* out,size_t n){
-  if(rtcReady){DateTime t=rtc.now(); snprintf(out,n,"/IMG_%04d%02d%02d_%02d%02d%02d.jpg",t.year(),t.month(),t.day(),t.hour(),t.minute(),t.second());}
+  if(rtcReady){ DateTime t=rtc.now(); snprintf(out,n,"/IMG_%04d%02d%02d_%02d%02d%02d.jpg",t.year(),t.month(),t.day(),t.hour(),t.minute(),t.second()); }
   else snprintf(out,n,"/IMG_%lu.jpg",millis());}
 
 void messageScreen(const char* title,const char* a,const char* b=nullptr,const char* c=nullptr){
@@ -398,7 +443,8 @@ void plot(uint8_t m,int16_t x,int16_t y,int16_t w,int16_t h,float lo,float hi){
     px=cx;py=cy;havePrev=true;}}
 
 void dottedHLine(int16_t x,int16_t y,int16_t w,uint16_t color){
-  for(int16_t xx=x;xx<x+w;xx+=4){int16_t n=min((int16_t)2,(int16_t)(x+w-xx)); tft.drawFastHLine(xx,y,n,color);}}
+  for(int16_t xx=x;xx<x+w;xx+=4){
+    int16_t n=min((int16_t)2,(int16_t)(x+w-xx)); tft.drawFastHLine(xx,y,n,color);}}
 
 int16_t gasRatioY(float ratio,int16_t y,int16_t h,float lo,float hi){
   float norm=(ratio-lo)/(hi-lo);
@@ -460,7 +506,7 @@ void drawMetric(uint8_t m){
     if(gasCalibrated){tft.setTextColor(ST77XX_MAGENTA);tft.print("Increase: ");tft.print(currentGasRatio,2);tft.print('x');}
     else{tft.setTextColor(C_DIM);tft.print("Increase: --");}
     const int16_t gx=40,gy=54,gw=118,gh=62; tft.drawFastVLine(gx-1,gy,gh+1,C_GRID);tft.drawFastHLine(gx-1,gy+gh,gw+1,C_GRID);tft.drawFastHLine(gx,gy+gh/2,gw,C_GRID);
-    tft.setTextColor(C_DIM); tft.setCursor(0,gy);tft.print(hi,0);tft.print('x');
+    tft.setTextColor(C_DIM); tft.setCursor(0,gy);tft.print(hi,0);tft.print('x'); tft.setCursor(0,gy+gh/2-3);tft.print((hi+lo)/2.0f,1);tft.print('x');
     tft.setCursor(0,gy+gh-7);tft.print(lo,1);tft.print('x');
     if(gasCalibrated){
       if(GAS_CAUTION_RATIO>=lo && GAS_CAUTION_RATIO<=hi){
@@ -551,7 +597,8 @@ bool serialPromptUInt(const char* prompt,uint16_t &value,uint16_t minV,uint16_t 
     if(parseUIntValue(s,minV,maxV,n)){ value=(uint16_t)n; return true; }
     Serial.println("Invalid number, try again.");}}
 
-void runSerialConfig(){// GPIO1 is TFT DC normally and UART TX during serial setup, so the LCD freezes here.
+void runSerialConfig(){
+  // GPIO1 is TFT DC normally and UART TX during serial setup, so the LCD freezes here.
   tft.fillScreen(C_BG); tft.setTextSize(2); tft.setTextColor(ST77XX_CYAN); tft.setCursor(3,6); tft.print("SERIAL"); tft.drawFastHLine(3,28,154,C_GRID);
   tft.setTextSize(1); tft.setTextColor(ST77XX_WHITE); tft.setCursor(3,40); tft.print("Serial Enabled -"); tft.setCursor(3,52); tft.print("LCD Frozen.");
   tft.setTextColor(C_DIM); tft.setCursor(3,72); tft.print("Continue in Serial Monitor"); tft.setCursor(3,84); tft.print("115200 baud / Newline"); deselectTFT();
@@ -572,6 +619,7 @@ void runSerialConfig(){// GPIO1 is TFT DC normally and UART TX during serial set
   if(!serialPrompt("Trial name:",s,false,sizeof(c.trialName)-1) || !copyConfigValue(c.trialName,sizeof(c.trialName),s)) serialSetupError();
   if(!serialPromptUInt("Log interval (minutes) [Enter Blank for 30 mins]:",c.logIntervalMin,1,1440,true,30)) serialSetupError();
   if(!serialPromptUInt("Photo interval (minutes) [Enter Blank for 30 mins]:",c.photoIntervalMin,1,1440,true,30)) serialSetupError();
+  if(!serialPrompt("Google Sheets script URL [Enter Blank to disable]:",s,true,sizeof(c.googleScriptUrl)-1) || !copyConfigValue(c.googleScriptUrl,sizeof(c.googleScriptUrl),s)) serialSetupError();
   if(!validateConfig(c)){ Serial.println("Config validation failed."); serialSetupError(); }
   if(!writeConfigToSD(c)){ Serial.println("Could not write /config.txt."); serialSetupError(); }
   AppConfig verify={};
@@ -665,7 +713,7 @@ void drawPhotoResult(const char* filename,size_t bytes,bool sdOk,bool mqttOk,boo
 
 void manualMeasurement(){
   float v[NM]; readSensors(v); drawActionProgress("MANUAL SAMPLE","Writing DATA.CSV..."); bool ok=saveMeasurement(v,"MANUAL");
-  bool mqttAttempted=ok && mqttClient.connected(); bool mqttOk=ok && publishTelemetry(v,"MANUAL"); drawMeasurementResult(v,ok,mqttOk,mqttAttempted); delay(1800); drawPage(true);}
+  bool mqttAttempted=ok && mqttClient.connected(); bool mqttOk=ok && publishTelemetry(v,"MANUAL"); if(ok) publishToGoogleSheets(v,"MANUAL"); drawMeasurementResult(v,ok,mqttOk,mqttAttempted); delay(1800); drawPage(true);}
 
 void takePhoto(){
   if(!cameraReady){messageScreen("CAMERA","Camera unavailable.");delay(1200);drawPage(true);return;}
@@ -676,7 +724,7 @@ void takePhoto(){
   if(mqttAttempted){ publishPhotoEvent(filename,len); mqttOk=mqttClient.connected(); }
   free(jpg); drawPhotoResult(filename,len,ok,mqttOk,mqttAttempted); delay(1800); drawPage(true);}
 
-void scheduledMeasurement(){float v[NM]; readSensors(v); bool ok=saveMeasurement(v,"SCHEDULED"); if(ok) publishTelemetry(v,"SCHEDULED");}
+void scheduledMeasurement(){float v[NM]; readSensors(v); bool ok=saveMeasurement(v,"SCHEDULED"); if(ok){publishTelemetry(v,"SCHEDULED"); publishToGoogleSheets(v,"SCHEDULED");}}
 
 void scheduledPhoto(){
   if(!cameraReady) return; uint8_t* jpg=nullptr; size_t len=0; if(captureJPEG(jpg,len)!=PHOTO_OK) return;
@@ -704,7 +752,7 @@ void setup(){
   bootStatus(5,"SD card",sdReady); bootWorking(6,"Camera"); cameraReady=initCamera(); bootStatus(6,"Camera",cameraReady);
   mqttClient.setServer(cfg.mqttServer,cfg.mqttPort); mqttClient.setCallback(mqttCallback); mqttClient.setBufferSize(768); mqttClient.setKeepAlive(30);
   mqttClient.setSocketTimeout(1); startWiFi(); float v[NM]; readSensors(v); pushHistory(v);
-  if(sdReady){ bool ok=saveMeasurement(v,"STARTUP"); if(ok) publishTelemetry(v,"STARTUP");}
+  if(sdReady){ bool ok=saveMeasurement(v,"STARTUP"); if(ok){ publishTelemetry(v,"STARTUP"); publishToGoogleSheets(v,"STARTUP"); } }
   delay(1200); lastLog=lastLive=lastGraph=lastSDCheck=lastPhoto=millis(); drawPage(true);}
 
 void loop(){

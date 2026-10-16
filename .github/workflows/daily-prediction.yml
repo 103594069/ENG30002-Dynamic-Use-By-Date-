@@ -1,0 +1,29 @@
+name: Daily use-by prediction
+
+on:
+  schedule:
+    # 8am and 8pm Australia/Sydney. As of Oct 2026, Sydney is on AEDT
+    # (UTC+11, daylight saving), so 8am local = 21:00 UTC the previous
+    # day and 8pm local = 09:00 UTC. If this workflow is still running
+    # after the switch back to AEST (UTC+10, typically early April),
+    # both times below need to shift one hour LATER in UTC to keep
+    # firing at 8am/8pm local.
+    - cron: '0 21 * * *'  # 8am AEDT
+    - cron: '0 9 * * *'   # 8pm AEDT
+  workflow_dispatch: {}   # allows a manual run from the Actions tab, for the smoke test in Task 5
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m prediction.sheets_daily_run
+        env:
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+          SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}

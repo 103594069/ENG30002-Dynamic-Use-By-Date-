@@ -1,0 +1,13 @@
+# Python bytecode and caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local run output of `python -m prediction.cli` (regenerated every run,
+# not a deliverable)
+prediction/predictions.csv
+predictions.csv
+
+# Isolated workspaces for subagent-driven-development plan execution
+.worktrees/
