@@ -15,7 +15,6 @@ from typing import Optional
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from prediction.data_io import PREDICTION_FIELDS, prediction_row_values
 from prediction.models import PredictionRow
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -23,6 +22,17 @@ _READINGS_RANGE = "Sheet1!A2:E"
 _PREDICTIONS_DATE_RANGE = "Predictions!A2:A"
 _PREDICTIONS_APPEND_RANGE = "Predictions!A1"
 _PREDICTIONS_HEADER_CHECK_RANGE = "Predictions!A1:A1"
+
+# Narrower than data_io.PREDICTION_FIELDS: this is what a human reads in the
+# live Sheet, not the full audit trail (that still goes to predictions.csv
+# via data_io.write_prediction_row). run_ts stays first and in ISO format -
+# read_last_prediction_date's once-per-day gate parses column A with
+# datetime.fromisoformat, so it can't be reformatted for display.
+_SHEET_PREDICTION_FIELDS = ["run_ts", "predicted_use_by", "status"]
+
+
+def _sheet_row_values(row: PredictionRow) -> list:
+    return [row.run_ts.isoformat(), row.predicted_use_by.strftime("%d/%m/%Y"), row.status]
 
 
 def load_credentials(key_json: str):
@@ -65,8 +75,8 @@ def append_prediction_row(spreadsheet_id: str, credentials, row: PredictionRow) 
     ).execute()
     is_new = not existing.get("values")
 
-    body_rows = [PREDICTION_FIELDS] if is_new else []
-    body_rows.append(["" if v is None else str(v) for v in prediction_row_values(row)])
+    body_rows = [_SHEET_PREDICTION_FIELDS] if is_new else []
+    body_rows.append(["" if v is None else str(v) for v in _sheet_row_values(row)])
 
     # RAW, not USER_ENTERED: keeps run_ts stored as the exact ISO string
     # read_last_prediction_date parses back with datetime.fromisoformat - a
