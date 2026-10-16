@@ -7,7 +7,7 @@ ESP32 device  --Wi-Fi-->  Google Sheet  --Q10 model-->  predicted use-by date
                                          --daily-->       Telegram message
 ```
 
-Last updated: 13 Oct 2026. Branch: `dev`.
+Last updated: 16 Oct 2026. Branch: `dev`.
 
 ## Team split (as of 12 Oct)
 
@@ -106,6 +106,41 @@ Last updated: 13 Oct 2026. Branch: `dev`.
   prediction is a range, not a single date. Not linked here since Claude Docs
   artifacts are private-by-default and not yet shared with the team; ask Marcus
   for the link if you need it.
+
+## What changed 16 Oct
+
+- **Unattended daily Sheet write-back is now live**, superseding the "not live yet"
+  note in "What changed 13 Oct" above. All remaining setup steps from
+  `prediction/README.md` are done except `config.FOOD_START_TS` (still open, see
+  below):
+  - Service account `sheets-predictor@dynamic-use-by-date.iam.gserviceaccount.com`
+    granted **Editor** on the real Sheet ("ENG30002",
+    `1m-sbrTdaq9SaZ9e3JOo0J6H0UR8qC9YvaCJck64VezU`).
+  - `GOOGLE_SERVICE_ACCOUNT_KEY` (repository secret) and `SPREADSHEET_ID`
+    (repository variable) set in GitHub Settings → Secrets and variables → Actions.
+  - `.github/workflows/daily-prediction.yml` merged from `dev` to `main` (PR #1) -
+    required for the `schedule` trigger to ever fire, and for the workflow to even
+    appear in the Actions tab for the manual `workflow_dispatch` smoke test.
+  - Manual smoke test run via `workflow_dispatch`: confirmed a row was written to
+    the real Sheet's `Predictions` tab.
+- **Real Sheet's actual tab names didn't match the code/docs' assumed names** -
+  found while wiring up the above. The readings tab is actually named `Sheet1`, not
+  `Readings`; fixed by pointing `sheets_sync._READINGS_RANGE` at `Sheet1!A2:E`
+  instead of renaming the tab. The predictions tab was `Prediction` (singular);
+  renamed to `Predictions` to match the code instead, since that one's cheaper to
+  fix in the Sheet than to go rename `_PREDICTIONS_*` constants and existing data.
+- **Predictions tab output simplified for human readability** (Marcus's call): the
+  live Sheet now gets only `run_ts`, `predicted_use_by` (DD/MM/YYYY), and `status`
+  per row instead of the full 19-field audit record. The full detail (Q10 inputs,
+  MQ-135 cross-check, gap/drop counts, etc.) is unaffected and still goes to the
+  local `predictions.csv` via `data_io.write_prediction_row` - this only changes
+  `sheets_sync.append_prediction_row`'s narrower, Sheet-only field list.
+- **First real prediction recorded**: 2026-10-16T14:08 run against `Sheet1`'s actual
+  logged data, status "Past use-by". Expected, not a bug - `config.FOOD_START_TS` is
+  still `None`, so it fell back to `Sheet1`'s earliest row (10/6 bench-test data) as
+  food-start. **Still open**: set `FOOD_START_TS` to the real trial's actual start
+  time once known, or the unattended runs will keep reporting against stale
+  bench-test data.
 
 ## Decisions made 12 Oct
 
@@ -225,7 +260,11 @@ Last updated: 13 Oct 2026. Branch: `dev`.
   CLI, or still via Apps Script — decide per open risk #7); secrets into whichever
   side owns the Telegram call.
 - [ ] 16–18 Oct — End-to-end bench test (device → sheet → model → Telegram) over a multi-hour run.
-- [ ] 18–19 Oct — Merge `dev` → `main` once the real-Sheet path is verified.
+- [x] 16 Oct — Merge `dev` → `main` (two PRs: the write-back itself, then the
+  Sheet-output readability simplification). Done ahead of schedule, specifically
+  to unblock activating the daily write-back (see "What changed 16 Oct" above) -
+  not a full real-Sheet-path verification of the whole pipeline (device → Sheet
+  still isn't bench-tested, per the unchecked item above).
 
 **Week 3 (20–26 Oct)**
 - [ ] 20–22 Oct — Finish real trial replicates if the biolab slot lands; otherwise finalize on existing demo-run data; compute/document MAE.
